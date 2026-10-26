@@ -226,5 +226,109 @@ const body = () => ({
   check('maxConcurrency=1 时没有并发出站', peak === 1, peak)
 }
 
+// ---------------------------------------------------------------------------
+// 7. IdC：凭据没有 profileArn、实例区域 eu-west-1 -> 自动发现 ARN，
+//    聊天请求打到 ARN 所在区域，并带上 ARN（不带会 403 AccessDenied）
+// ---------------------------------------------------------------------------
+{
+  const idcStore = {
+    directory: 'unused',
+    active: async () => ({
+      credential: { accessToken: 'aoa-idc', method: 'idc', region: 'eu-west-1', expiresAt: Date.now() + 3_600_000 },
+      id: 'idc',
+      label: 'IdC',
+    }),
+    read: async () => ({ accounts: [], activeId: null }),
+    describe: async () => ({ activeId: null, accounts: [] }),
+    clear: async () => {},
+  }
+  const arn = 'arn:aws:codewhisperer:us-east-1:123456789012:profile/ABCDEF'
+  const lookups = []
+  const posts = []
+  const client = new KiroClient({
+    options: () => ({}),
+    store: idcStore,
+    postJson: async (url, payload, headers) => {
+      lookups.push({ url, headers })
+      // 只有 us-east-1 的 CodeWhisperer 面有这个账号的 profile
+      if (url === 'https://codewhisperer.us-east-1.amazonaws.com/ListAvailableProfiles') {
+        return { status: 200, body: { profiles: [{ arn, profileName: 'Kiro' }] } }
+      }
+      return { status: 403, body: { message: 'not here' } }
+    },
+    post: async spec => { posts.push(spec); return { status: 200, headers: {}, body: streamOf(okFrames) } },
+    sleep: async () => {},
+  })
+  const events = await drain(client)
+  check('IdC 请求成功', events.some(event => event.kind === 'text'), JSON.stringify(events))
+  check('IdC 先问实例区域的 CodeWhisperer 面', lookups[0]?.url === 'https://codewhisperer.eu-west-1.amazonaws.com/ListAvailableProfiles', lookups[0]?.url)
+  check('profile 查询不带 profile-arn 头', lookups.every(item => item.headers['x-amzn-codewhisperer-profile-arn'] === undefined))
+  check('IdC 聊天打到 ARN 所在区域', posts[0]?.url === 'https://codewhisperer.us-east-1.amazonaws.com/generateAssistantResponse', posts[0]?.url)
+  check('IdC 聊天带 profile-arn 头', posts[0]?.headers['x-amzn-codewhisperer-profile-arn'] === arn)
+  const sent = JSON.parse(posts[0]?.body ?? '{}')
+  check('IdC 请求体带 profileArn', sent.profileArn === arn, sent.profileArn)
+
+  // 第二次请求命中缓存，不再查询
+  const before = lookups.length
+  await drain(client)
+  check('profileArn 被缓存', lookups.length === before, `${before} -> ${lookups.length}`)
+}
+
+// ---------------------------------------------------------------------------
+// 8. IdC 发现失败 -> 仍发请求（交给上游报错），且失败结果短暂缓存
+// ---------------------------------------------------------------------------
+{
+  let lookups = 0
+  const posts = []
+  const client = new KiroClient({
+    options: () => ({}),
+    store: {
+      directory: 'unused',
+      active: async () => ({ credential: { accessToken: 'aoa-x', method: 'idc', region: 'us-east-1', expiresAt: Date.now() + 3_600_000 }, id: 'x', label: 'X' }),
+      read: async () => ({ accounts: [], activeId: null }),
+      describe: async () => ({ activeId: null, accounts: [] }),
+      clear: async () => {},
+    },
+    postJson: async () => { lookups += 1; return { status: 403, body: {} } },
+    post: async spec => { posts.push(spec); return { status: 200, headers: {}, body: streamOf(okFrames) } },
+    sleep: async () => {},
+  })
+  await drain(client)
+  const first = lookups
+  await drain(client)
+  check('发现失败时仍发聊天请求', posts.length === 2, posts.length)
+  check('发现失败被短暂缓存', lookups === first, `${first} -> ${lookups}`)
+  check('无 ARN 时不带 profile-arn 头', posts[0].headers['x-amzn-codewhisperer-profile-arn'] === undefined)
+}
+
+// ---------------------------------------------------------------------------
+// 9. 面板调用 models(undefined) / usage(undefined)：IdC 发现路径不能读 undefined.aborted
+// ---------------------------------------------------------------------------
+{
+  const client = new KiroClient({
+    options: () => ({}),
+    store: {
+      directory: 'unused',
+      active: async () => ({ credential: { accessToken: 'aoa-y', method: 'idc', region: 'eu-west-1', expiresAt: Date.now() + 3_600_000 }, id: 'y', label: 'Y' }),
+      read: async () => ({ accounts: [], activeId: null }),
+      describe: async () => ({ activeId: null, accounts: [] }),
+      clear: async () => {},
+    },
+    // 网络错误走 catch 分支，正是那里读了 signal.aborted
+    postJson: async () => { throw new Error('ECONNRESET') },
+    post: async () => ({ status: 200, headers: {}, body: streamOf(okFrames) }),
+    sleep: async () => {},
+  })
+  for (const name of ['models', 'usage']) {
+    let message = ''
+    try {
+      await client[name](undefined, false)
+    } catch (error) {
+      message = String(error?.message)
+    }
+    check(`${name}(undefined) 不因 signal 缺失崩溃`, !message.includes("reading 'aborted'"), message)
+  }
+}
+
 console.log(`\n${pass} passed, ${fail} failed`)
 process.exit(fail === 0 ? 0 : 1)

@@ -32,10 +32,23 @@ Nothing is baked in. Priority order:
 
 Kiro-owned files are read, never rewritten; a refreshed Kiro token stays in memory. Files this plugin writes are mode `0600`.
 
+Seven ways to add an account, from **Settings → Kiro Proxy → 连接**:
+
+| Method | What happens |
+| --- | --- |
+| AWS Builder ID | AWS OIDC device code; open the link, enter the code, approve |
+| IAM Identity Center | Same device code against your instance: needs the portal URL (`https://<org>.awsapps.com/start`) and its region |
+| Google / GitHub | Kiro's own social device code, approved on `app.kiro.dev` |
+| Refresh token | Pasted token, validated locally; refreshes through Kiro's auth service |
+| API key | Pasted `ksk_` key; sent with `TokenType: API_KEY` |
+| External IdP | Pasted Microsoft Entra / external-IdP JSON; refreshes at its own endpoint |
+
+The OIDC registration carries Kiro's own Identity Center issuer. Without it the AWS portal answers the device code with "We could not verify your sign-in credentials" — it is a fixed value, not your start URL.
+
 | `authMethod` | Refresh endpoint | Chat surface |
 | --- | --- | --- |
 | `builder-id` | `oidc.<region>.amazonaws.com/token` + device registration | `q.<region>.amazonaws.com` |
-| `idc` | same | `codewhisperer.<region>.amazonaws.com` |
+| `idc` | same, at the Identity Center instance's region | `codewhisperer.<region>.amazonaws.com`, region taken from the discovered profile ARN |
 | `google` / `github` / `social` | `prod.us-east-1.auth.desktop.kiro.dev/refreshToken` | `q.<region>.amazonaws.com` |
 | `imported` | same as above | `q.<region>.amazonaws.com` |
 | `api_key` | no refresh | `q.<region>.amazonaws.com` + `TokenType: API_KEY` |
@@ -198,10 +211,24 @@ dsh --profile <profile>
 
 Kiro 自己的文件只读不写；刷新出来的 token 只留在内存里。插件写出的文件是 `0600`。
 
+**Settings → Kiro Proxy → 连接** 提供七种登录方式：
+
+| 方式 | 过程 |
+| --- | --- |
+| AWS Builder ID | AWS OIDC 设备码：打开链接、输入验证码、批准 |
+| IAM 身份中心 | 同样的设备码，但打到你的实例：需要门户 URL（`https://<org>.awsapps.com/start`）与实例区域 |
+| Google / GitHub | Kiro 自己的社交设备码，在 `app.kiro.dev` 上确认 |
+| Refresh token | 粘贴 token，本地校验；后续走 Kiro 的刷新服务 |
+| API Key | 粘贴 `ksk_` 开头的 key；请求带 `TokenType: API_KEY` |
+| External IdP | 粘贴 Microsoft Entra / 外部 IdP 的 JSON；在它自己的端点刷新 |
+
+OIDC 注册固定带 Kiro 自己的身份中心 issuer。少了它，AWS 门户会对设备码回「无法验证您的登录凭证」
+—— 那是固定值，不是你的起始 URL。
+
 | `authMethod` | 刷新端点 | chat surface |
 | --- | --- | --- |
 | `builder-id` | `oidc.<region>.amazonaws.com/token` + 设备注册 | `q.<region>.amazonaws.com` |
-| `idc` | 同上 | `codewhisperer.<region>.amazonaws.com` |
+| `idc` | 同上，打到身份中心实例所在区域 | `codewhisperer.<region>.amazonaws.com`，区域取自查到的 profile ARN |
 | `google` / `github` / `social` | `prod.us-east-1.auth.desktop.kiro.dev/refreshToken` | `q.<region>.amazonaws.com` |
 | `imported` | 同上 | `q.<region>.amazonaws.com` |
 | `api_key` | 不刷新 | `q.<region>.amazonaws.com` + `TokenType: API_KEY` |

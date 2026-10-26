@@ -9,6 +9,8 @@
  * 额外做一层“假渲染”：用一个极小但带状态的 hooks 实现真正执行组件函数体，
  * 并让 `setState` 触发重渲染，这样异步 `fetch` 回来的 status 也能进树，
  * 账号行/用量行/徽标百分比这些分支才真的被跑到。
+ * 还覆盖设置页的登录流程：chooser（7 个方式）→ IdC 表单 → pending（验证码 + 链接）
+ * → 失败步（重新开始）。
  * 仍然不覆盖：真实浏览器的布局、真实 React 的并发与依赖比较语义、真实 Host 的 API 返回。
  */
 
@@ -41,7 +43,6 @@ function check(name, condition, detail) {
 const frames = new Map()
 let currentFrame
 let dirty = false
-let activeRoot
 
 function createElement(type, props, ...children) {
   return {
@@ -162,7 +163,6 @@ async function settleAt(Component, props, rootPath) {
     result = { tree, ...collected }
     if (!dirty) break
   }
-  activeRoot = result.tree
   return result
 }
 
@@ -173,9 +173,18 @@ function settleFresh(Component, props) {
   return settleAt(Component, props, `mount${mountIndex}`)
 }
 
-/** 首次渲染用固定路径，方便后面的用例复用/对照。 */
-function settle(Component, props) {
-  return settleAt(Component, props, `first:${Component.name || 'anon'}`)
+/**
+ * 一个可反复重渲染的挂载点。
+ *
+ * 槽组件是匿名箭头函数，用 `Component.name` 做路径会让设置页和徽标共用同一份
+ * hook 帧（两处都叫 'anon'）。所以这里按用例编号取路径，每个用例一个独立实例，
+ * 交互后再调一次 render() 就是“同一个实例的新一次渲染”。
+ */
+let caseIndex = 0
+function mountCase(Component, props) {
+  caseIndex += 1
+  const path = `case${caseIndex}`
+  return () => settleAt(Component, props, path)
 }
 
 // ── 假 window / document / fetch ────────────────────────────────────────────
@@ -222,9 +231,14 @@ const STATUS = {
     key: 'sk-local-test',
     openaiBaseUrl: 'http://127.0.0.1:53984/v1',
     anthropicBaseUrl: 'http://127.0.0.1:53984',
+    requireKey: true,
     enabled: true,
   },
-  config: { proxyUrl: '', region: 'us-east-1', profileArn: '', maxContextWindow: 200000 },
+  config: {
+    proxyUrl: '', region: 'us-east-1', profileArn: '', maxContextWindow: 200000,
+    fallbackOnEmpty: true, fallbackModels: [],
+  },
+  lastFallback: null,
   errors: ['Usage: GetUsageLimits throttled'],
 }
 
@@ -361,6 +375,8 @@ const enKeys = Object.keys(registration.dictionary.en).sort()
 const zhKeys = Object.keys(registration.dictionary.zh).sort()
 check('en/zh 键集合一致', JSON.stringify(enKeys) === JSON.stringify(zhKeys), `en=${enKeys.length} zh=${zhKeys.length}`)
 check('字典非空（> 40 键）', enKeys.length > 40, String(enKeys.length))
+check('登录流程文案齐全', ['connect', 'chooseMethod', 'startLogin', 'saveImport', 'waiting', 'restart', 'code']
+  .every(key => typeof registration.dictionary.zh[key] === 'string'))
 log(`       locale keys: ${enKeys.length}`)
 
 // ── 样式 ───────────────────────────────────────────────────────────────────
@@ -369,10 +385,29 @@ const styleNode = documentStub.getElementById('dsh-kiro-proxy-style')
 check('<style id="dsh-kiro-proxy-style"> 已注入', styleNode !== undefined && styleNode !== null)
 check('样式内容包含 dshkp- 前缀', Boolean(styleNode && styleNode.textContent.includes('.dshkp-wrap')))
 check('样式只引用 dsh-alias token', Boolean(styleNode && styleNode.textContent.includes('var(--dsw-alias-')))
+check('样式含登录方式行', Boolean(styleNode && styleNode.textContent.includes('.dshkp-method{')))
+check('样式含验证码徽章', Boolean(styleNode && styleNode.textContent.includes('.dshkp-code-value')))
 
-// ── 假渲染：设置页 ──────────────────────────────────────────────────────────
-const settingsRender = await settle(registerCalls[0].component, { ctx: fakeCtx })
-const settings = settingsRender
+// ── 渲染工具 ───────────────────────────────────────────────────────────────
+const tick = (ms) => new Promise(resolve => setTimeout(resolve, ms === undefined ? 20 : ms))
+function findButton(rendered, label) {
+  return rendered.elements.find(node => node && node.type === 'button'
+    && node.children.some(child => typeof child === 'string' && child.includes(label)))
+}
+function findExactButton(rendered, label) {
+  return rendered.elements.find(node => node && node.type === 'button'
+    && node.children.some(child => typeof child === 'string' && child === label))
+}
+function methodRows(rendered) {
+  return rendered.elements.filter(node => node && node.props && node.props.className === 'dshkp-method')
+}
+function callsTo(suffix) {
+  return fetched.filter(item => item.url.endsWith(suffix))
+}
+
+// ── 假渲染：设置页（主用例，后续交互都复用这个实例）──────────────────────────
+const renderSettings = mountCase(registerCalls[0].component, { ctx: fakeCtx })
+const settings = await renderSettings()
 check('设置页渲染出账号行（dshkp-row）', settings.classes.some(name => name.startsWith('dshkp-row')), settings.classes.join(','))
 check('设置页渲染出模型勾选框', settings.classes.includes('dshkp-check'))
 check('设置页渲染出用量行', settings.classes.some(name => name.startsWith('dshkp-usage-row')))
@@ -380,17 +415,23 @@ check('设置页渲染出代理键值行', settings.classes.some(name => name.st
 check('设置页渲染出错误列表', settings.classes.includes('dshkp-errors'))
 check('设置页文案为中文（含「账号」）', settings.blob.includes('账号'), settings.blob.slice(0, 160))
 check('设置页显示当前账号徽章', settings.blob.includes('当前'))
+check('状态行显示已登录账号', settings.blob.includes('已登录为 AWS Builder ID'), settings.blob.slice(0, 200))
 check('设置页显示 plan', settings.blob.includes('KIRO PRO'))
 check('设置页显示 OpenAI Base URL', settings.blob.includes('http://127.0.0.1:53984/v1'))
 check('设置页显示用量 used/limit', settings.blob.includes('95 / 100'), settings.blob.slice(0, 200))
 check('设置页有「轮换 Key」按钮文案', settings.blob.includes('轮换 Key'))
+check('模型卡显示 n/m 已选', settings.blob.includes('1/2 已选'), settings.blob.slice(0, 300))
+check('模型卡有全选/全不选', settings.blob.includes('全选') && settings.blob.includes('全不选'))
+check('账号卡 header 三个动作齐全',
+  Boolean(findExactButton(settings, '连接')) && Boolean(findButton(settings, '刷新用量')) && Boolean(findButton(settings, '全部退出')),
+  settings.texts.slice(0, 14).join(','))
+check('页头有刷新按钮', Boolean(findButton(settings, '刷新')))
+check('初始不渲染登录流程', !settings.blob.includes('选择登录方式'))
+
+// 单列顺序：账号 → 模型 → 用量 → 代理 → 连接配置
 {
-  const details = settings.elements.find(node => node && node.type === 'details')
-  check('导入卡折进 <details>', Boolean(details), JSON.stringify(settings.classes.filter(c => c.startsWith('dshkp-'))))
-  check('<details> 默认不收 open 属性（即收起）', Boolean(details) && details.props.open === undefined)
-  const summary = settings.elements.find(node => node && node.type === 'summary')
-  check('折叠标题是「添加账号」', Boolean(summary) && summary.children.includes('添加账号'), summary && JSON.stringify(summary.children))
-  check('展开后可见「导入 refresh token」', settings.blob.includes('导入 refresh token'))
+  const order = ['账号', '模型', 'KIRO PRO', 'OpenAI Base URL', '连接配置'].map(text => settings.blob.indexOf(text))
+  check('卡片顺序为 账号/模型/用量/代理/连接', order.every((index, position) => index >= 0 && (position === 0 || index > order[position - 1])), JSON.stringify(order))
 }
 
 // 设置页的用量卡：进度条 + 剩余百分比 + 独立刷新
@@ -398,16 +439,181 @@ check('用量卡有进度条', settings.classes.includes('dshkp-usage-bar'), set
 check('用量卡有剩余百分比文字', /剩余 \d+%/.test(settings.blob), settings.blob.slice(0, 200))
 check('用量卡有「刷新用量」按钮', settings.texts.some(text => typeof text === 'string' && text.includes('刷新用量')), settings.texts.slice(0, 12).join(','))
 {
-  const before = fetched.filter(item => item.url.endsWith('/kiro-proxy/api/refresh')).length
-  const usageRefresh = settings.elements.find(node => node && node.type === 'button'
-    && node.children.some(child => typeof child === 'string' && child.includes('刷新用量')))
+  const before = callsTo('/kiro-proxy/api/refresh').length
+  const usageRefresh = findButton(settings, '刷新用量')
   if (usageRefresh) usageRefresh.props.onClick()
-  await new Promise(resolve => setTimeout(resolve, 20))
-  const after = fetched.filter(item => item.url.endsWith('/kiro-proxy/api/refresh')).length
+  await tick()
+  const after = callsTo('/kiro-proxy/api/refresh').length
   check('「刷新用量」触发 POST /kiro-proxy/api/refresh', after === before + 1, `${before} -> ${after}`)
 }
 
-const statusReads = fetched.filter(item => item.url.endsWith('/kiro-proxy/api/status'))
+// ── 登录流程：chooser（7 个方式）────────────────────────────────────────────
+let view
+{
+  const connectButton = findExactButton(settings, '连接')
+  if (connectButton) connectButton.props.onClick()
+  view = await renderSettings()
+
+  const rows = methodRows(view)
+  check('chooser 渲染 7 个登录方式行', rows.length === 7, String(rows.length))
+  check('chooser 文案「选择登录方式」', view.blob.includes('选择登录方式'))
+  check('7 种方式 id 齐全',
+    rows.map(row => row.props['data-method']).join(',') === 'builder-id,idc,google,github,refresh-token,api-key,external-idp',
+    rows.map(row => row.props['data-method']).join(','))
+  check('每个方式一行说明', view.elements.filter(node => node && node.props && node.props.className === 'dshkp-method-desc').length === 7)
+  check('每行一个图标 + 一个箭头',
+    view.elements.filter(node => node && node.props && node.props.className === 'dshkp-method-icon').length === 7
+    && view.elements.filter(node => node && node.props && node.props.className === 'dshkp-chevron').length === 7)
+  check('7 种方式的中文标题齐全',
+    ['AWS Builder ID', 'IAM 身份中心', 'Google', 'GitHub', '导入 refresh token', '导入 API Key', 'Microsoft Entra / 外部 IdP']
+      .every(title => view.blob.includes(title)), view.blob.slice(0, 400))
+  check('Builder ID 标了「推荐」', view.blob.includes('推荐'))
+}
+
+// ── IdC 表单：起始 URL + 区域 + 开始登录 ────────────────────────────────────
+{
+  const idcRow = methodRows(view).find(row => row.props['data-method'] === 'idc')
+  if (idcRow) idcRow.props.onClick()
+  view = await renderSettings()
+
+  const startInput = view.elements.find(node => node && node.type === 'input' && node.props.type === 'url')
+  check('IdC 表单有起始 URL 输入', Boolean(startInput)
+    && String(startInput.props.placeholder).includes('awsapps.com/start'),
+    JSON.stringify(startInput && startInput.props.placeholder))
+  const regionInput = view.elements.find(node => node && node.type === 'input' && node.props.placeholder === 'us-east-1')
+  check('IdC 表单有区域输入', Boolean(regionInput))
+  check('IdC 表单标注「起始 URL」与「区域」', view.blob.includes('起始 URL') && view.blob.includes('区域'), view.blob.slice(0, 240))
+  check('IdC 表单有「返回」', Boolean(findButton(view, '返回')))
+  const startButton = findExactButton(view, '开始登录')
+  check('IdC 表单有「开始登录」', Boolean(startButton))
+
+  // 两个字段都空时点击：只提示，不发 /login/start
+  const before = callsTo('/login/start').length
+  if (startButton) startButton.props.onClick()
+  await tick()
+  check('IdC 字段为空时不发起登录', callsTo('/login/start').length === before, String(callsTo('/login/start').length))
+  view = await renderSettings()
+  check('IdC 字段为空时提示一行错误', view.blob.includes('请同时填写起始 URL 和区域'), view.blob.slice(0, 240))
+}
+
+// ── pending 步：验证码 + 打开登录页 + 取消 ──────────────────────────────────
+{
+  const startInput = view.elements.find(node => node && node.type === 'input' && node.props.type === 'url')
+  const regionInput = view.elements.find(node => node && node.type === 'input' && node.props.placeholder === 'us-east-1')
+  startInput.props.onChange({ target: { value: 'https://my-org.awsapps.com/start' } })
+  regionInput.props.onChange({ target: { value: 'us-east-1' } })
+  view = await renderSettings()
+
+  const savedFetch = globalThis.fetch
+  const before = fetched.length
+  globalThis.fetch = async (url, options) => {
+    fetched.push({ url: String(url), options })
+    if (String(url).endsWith('/login/start')) {
+      return {
+        ok: true,
+        status: 200,
+        async json() {
+          return {
+            ok: true,
+            value: {
+              id: 'L1', method: 'idc', state: 'pending', userCode: 'WXYZ-1234',
+              verificationUri: 'https://device.example/', verificationUriComplete: 'https://device.example/?user_code=WXYZ-1234',
+              interval: 5,
+            },
+          }
+        },
+      }
+    }
+    return savedFetch(url, options)
+  }
+  const startButton = findExactButton(view, '开始登录')
+  check('填完字段后仍有「开始登录」', Boolean(startButton))
+  if (startButton) startButton.props.onClick()
+  await tick()
+
+  const startCall = fetched.slice(before).find(item => item.url.endsWith('/login/start'))
+  check('「开始登录」调用 POST /kiro-proxy/api/login/start', Boolean(startCall) && startCall.options.method === 'POST')
+  let payload = {}
+  try { payload = JSON.parse(startCall.options.body) } catch { payload = {} }
+  check('IdC payload 带 method/startUrl/region',
+    payload.method === 'idc' && payload.startUrl === 'https://my-org.awsapps.com/start' && payload.region === 'us-east-1',
+    JSON.stringify(payload))
+
+  view = await renderSettings()
+  check('pending 步显示验证码', view.blob.includes('WXYZ-1234'), view.blob.slice(0, 240))
+  check('验证码用等宽大号徽章', view.classes.includes('dshkp-code-value'))
+  check('pending 步有打开登录页链接', view.elements.some(node => node && node.type === 'a'
+    && String(node.props.href).includes('user_code=WXYZ-1234')))
+  check('pending 步显示等待授权', view.blob.includes('等待授权'))
+  check('pending 步有取消', Boolean(findButton(view, '取消')))
+
+  // 取消：POST /login/cancel 并关闭面板
+  const cancelBefore = callsTo('/login/cancel').length
+  const cancelButton = findButton(view, '取消')
+  if (cancelButton) cancelButton.props.onClick()
+  await tick()
+  const cancelCall = callsTo('/login/cancel')[cancelBefore]
+  check('「取消」调用 POST /login/cancel', Boolean(cancelCall) && cancelCall.options.method === 'POST')
+  check('取消 payload 带登录 id', Boolean(cancelCall) && JSON.parse(cancelCall.options.body).id === 'L1',
+    cancelCall && cancelCall.options.body)
+
+  view = await renderSettings()
+  check('取消后关闭登录流程', !view.blob.includes('选择登录方式') && !view.blob.includes('WXYZ-1234'))
+  check('取消后账号列表仍在', view.classes.some(name => name.startsWith('dshkp-row')))
+
+  globalThis.fetch = savedFetch
+}
+
+// ── Builder ID：无输入 -> 失败 -> 重新开始 ──────────────────────────────────
+{
+  const connectButton = findExactButton(view, '连接')
+  if (connectButton) connectButton.props.onClick()
+  view = await renderSettings()
+  const builderRow = methodRows(view).find(row => row.props['data-method'] === 'builder-id')
+  check('chooser 再次可达', methodRows(view).length === 7)
+  if (builderRow) builderRow.props.onClick()
+  view = await renderSettings()
+
+  // 整页只有连接配置卡的 4 个单行输入（外加 2 个模型勾选框）；登录表单不给 Builder ID 任何字段。
+  const textInputs = view.elements.filter(node => node && node.type === 'input'
+    && (node.props.type === 'text' || node.props.type === 'url' || node.props.type === 'password'))
+  const textareas = view.elements.filter(node => node && node.type === 'textarea')
+  check('Builder ID 表单无输入框', textInputs.length === 4 && textareas.length === 0,
+    `text inputs=${textInputs.length} textareas=${textareas.length}`)
+  check('Builder ID 表单有「开始登录」', Boolean(findExactButton(view, '开始登录')))
+  check('Builder ID 表单标题是方法名', view.blob.includes('AWS Builder ID'))
+
+  const savedFetch = globalThis.fetch
+  const before = fetched.length
+  globalThis.fetch = async (url, options) => {
+    fetched.push({ url: String(url), options })
+    if (String(url).endsWith('/login/start')) {
+      return { ok: false, status: 500, async json() { return { ok: false, error: 'device flow exploded' } } }
+    }
+    return savedFetch(url, options)
+  }
+  const startButton = findExactButton(view, '开始登录')
+  if (startButton) startButton.props.onClick()
+  await tick()
+  const failCall = fetched.slice(before).find(item => item.url.endsWith('/login/start'))
+  check('Builder ID 发起登录只带 method', Boolean(failCall) && JSON.parse(failCall.options.body).method === 'builder-id',
+    failCall && failCall.options.body)
+
+  view = await renderSettings()
+  check('登录失败渲染错误步', view.blob.includes('device flow exploded'), view.blob.slice(0, 260))
+  check('错误步标题是「登录失败」', view.blob.includes('登录失败'))
+  const restartButton = findExactButton(view, '重新开始')
+  check('错误步有「重新开始」', Boolean(restartButton))
+  check('设置页不会因为登录失败白屏', view.blob.includes('Kiro Proxy') && view.blob.includes('账号'))
+
+  if (restartButton) restartButton.props.onClick()
+  view = await renderSettings()
+  check('「重新开始」回到 chooser', methodRows(view).length === 7 && view.blob.includes('选择登录方式'))
+
+  globalThis.fetch = savedFetch
+}
+
+const statusReads = callsTo('/kiro-proxy/api/status')
 check('组件通过 /kiro-proxy/api/status 取数', statusReads.length >= 1, String(statusReads.length))
 
 // ── 假渲染：配额徽标 ────────────────────────────────────────────────────────
@@ -423,9 +629,9 @@ function fakeDirectory(current) {
 }
 const kiroDirectory = fakeDirectory({ provider: 'kiro-proxy', model: 'claude-sonnet-4.5' })
 const quotaSlot = registerCalls[1].component
-const quotaRender = await settle(quotaSlot, { ctx: fakeCtx, sessionId: 'session-1', directory: kiroDirectory })
-check('配额徽标有渲染结果', quotaRender.tree !== null && quotaRender.tree !== undefined)
-const quota = quotaRender
+const renderQuota = mountCase(quotaSlot, { ctx: fakeCtx, sessionId: 'session-1', directory: kiroDirectory })
+const quota = await renderQuota()
+check('配额徽标有渲染结果', quota.tree !== null && quota.tree !== undefined)
 check('徽标 class 带 dshkp-quota', quota.classes.some(name => name.startsWith('dshkp-quota')), quota.classes.join(','))
 check('徽标取最紧一行（Requests 95/100 -> 剩余 5%）', quota.blob.includes('剩余 5%'), quota.blob)
 check('5% 落在 low（琥珀）而非 critical（红）', quota.classes.some(name => name.includes('dshkp-quota-low')), quota.classes.join(','))
@@ -442,14 +648,13 @@ function rendersNothing(rendered) {
   return rendered.classes.length === 0 && rendered.texts.length === 0
 }
 
-const statusReadsBeforeOther = fetched.filter(item => item.url.endsWith('/kiro-proxy/api/status')).length
+const statusReadsBeforeOther = callsTo('/kiro-proxy/api/status').length
 const quotaOther = await settleFresh(quotaSlot, {
   ctx: fakeCtx, sessionId: 'session-1',
   directory: fakeDirectory({ provider: 'workbuddy', model: 'deepseek-v4.1-flash' }),
 })
 check('选中其他 provider 时徽标不渲染任何节点', rendersNothing(quotaOther), JSON.stringify(quotaOther.classes))
-check('选中其他 provider 时不去读额度',
-  fetched.filter(item => item.url.endsWith('/kiro-proxy/api/status')).length === statusReadsBeforeOther)
+check('选中其他 provider 时不去读额度', callsTo('/kiro-proxy/api/status').length === statusReadsBeforeOther)
 
 const quotaNoModel = await settleFresh(quotaSlot, { ctx: fakeCtx, sessionId: 'session-1', directory: fakeDirectory(null) })
 check('未选模型时徽标不渲染任何节点', rendersNothing(quotaNoModel), JSON.stringify(quotaNoModel.classes))
@@ -470,16 +675,11 @@ statusOverride = undefined
 
 // ── 交互：按钮点击真的打到契约里的端点 ────────────────────────────────────
 // 只断言 URL + method，不模拟真实响应；响应形状由上面的渲染断言覆盖。
-function findButton(rendered, label) {
-  return rendered.elements.find(node => node && node.type === 'button'
-    && node.children.some(child => typeof child === 'string' && child.includes(label)))
-}
-
 const callsBefore = fetched.length
 const refreshButton = findButton(settings, '刷新')
 check('设置页找到「刷新」按钮', Boolean(refreshButton), settings.texts.slice(0, 8).join(','))
 if (refreshButton) refreshButton.props.onClick()
-await new Promise(resolve => setTimeout(resolve, 10))
+await tick(10)
 const refreshCall = fetched.slice(callsBefore).find(item => item.url.endsWith('/kiro-proxy/api/refresh'))
 check('「刷新」调用 POST /kiro-proxy/api/refresh', Boolean(refreshCall) && refreshCall.options.method === 'POST',
   refreshCall && `${refreshCall.url} ${refreshCall.options.method}`)
@@ -489,7 +689,7 @@ const callsBeforeModel = fetched.length
 const modelCheckbox = settings.elements.find(node => node && node.type === 'input' && node.props.type === 'checkbox')
 check('设置页找到模型勾选框', Boolean(modelCheckbox))
 if (modelCheckbox) modelCheckbox.props.onChange({ target: { checked: true } })
-await new Promise(resolve => setTimeout(resolve, 10))
+await tick(10)
 const modelCall = fetched.slice(callsBeforeModel).find(item => item.url.endsWith('/kiro-proxy/api/settings'))
 check('勾选模型调用 POST /kiro-proxy/api/settings', Boolean(modelCall), modelCall && modelCall.url)
 check('勾选 payload 带 enabledModels 数组',
@@ -510,7 +710,7 @@ const chipButton = quota.elements.find(node => node && node.type === 'button'
 check('徽标是一个 button', Boolean(chipButton))
 const callsBeforeChip = fetched.length
 if (chipButton) chipButton.props.onClick()
-await new Promise(resolve => setTimeout(resolve, 20))
+await tick()
 const chipRefresh = fetched.slice(callsBeforeChip).find(item => item.url.endsWith('/kiro-proxy/api/refresh'))
 check('点击徽标调用 POST /kiro-proxy/api/refresh', Boolean(chipRefresh) && chipRefresh.options.method === 'POST',
   chipRefresh && `${chipRefresh.url} ${chipRefresh.options.method}`)
@@ -538,6 +738,7 @@ check('fetch 抛错时设置页不抛出异常', settingsFailed.threw === undefi
 check('fetch 抛错时渲染一行错误文字', settingsFailed.blob.includes('请求失败') && settingsFailed.blob.includes('network down'),
   settingsFailed.blob.slice(0, 160))
 check('fetch 抛错时仍渲染标题与刷新按钮', settingsFailed.blob.includes('Kiro Proxy') && settingsFailed.blob.includes('刷新'), settingsFailed.blob.slice(0, 120))
+check('fetch 抛错时不渲染登录流程', !settingsFailed.blob.includes('选择登录方式'))
 globalThis.fetch = healthyFetch
 
 // ── 清理函数可调用 ─────────────────────────────────────────────────────────

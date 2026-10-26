@@ -23,6 +23,7 @@ import { join } from 'node:path'
 import { KiroProxyAdapter } from './lib/adapter.js'
 import { AccountStore, storageDirectory } from './lib/kiro-auth.js'
 import { KiroClient } from './lib/kiro-client.js'
+import { DeviceLogin } from './lib/kiro-login.js'
 import { ProxyKeyStore, createProxyHandlers } from './lib/web.js'
 
 /**
@@ -120,6 +121,9 @@ export function apply(ctx, config = {}) {
   })
 
   const client = new KiroClient({ store, options: readOptions })
+  // Sign-in goes out through the same egress as chat: Kiro gates by egress, and a
+  // login that succeeds on a different route than the requests is confusing.
+  const login = new DeviceLogin({ proxyUrl: () => readOptions().proxyUrl })
   const adapter = new KiroProxyAdapter({
     client,
     provider: PROVIDER,
@@ -147,6 +151,7 @@ export function apply(ctx, config = {}) {
       client,
       store,
       keys,
+      login,
       baseUrl: () => webCtx.webServer.getOrigin(),
       requireKey: () => readOptions().requireProxyKey === true,
       updateSettings: patch => settings.merge(patch),

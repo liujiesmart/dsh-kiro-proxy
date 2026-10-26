@@ -22,6 +22,7 @@ const SUITES = [
   'translate-selftest.mjs',
   'adapter-test.mjs',
   'auth-test.mjs',
+  'login-test.mjs',
   'client-events-test.mjs',
   'retry-test.mjs',
   'fallback-test.mjs',

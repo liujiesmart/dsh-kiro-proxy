@@ -194,6 +194,18 @@ Host 挂在 `webServer`：
 - `POST /kiro-proxy/api/accounts/import` `{ json | refreshToken | apiKey, label? }`
 - `POST /kiro-proxy/api/accounts/remove` `{ id }`
 - `POST /kiro-proxy/api/settings` `{ proxyUrl?, region?, profileArn?, maxContextWindow?, enabledModels? }`
+- `POST /kiro-proxy/api/login/start` `{ method, region?, startUrl?, label?, secret?, json? }` -> `{ ok, value: LoginView, status?, accountId? }`
+  - `method`: `builder-id` | `idc` | `google` | `github` | `refresh-token` | `api-key` | `external-idp`
+  - `builder-id` / `idc` 走 AWS OIDC 设备码（`client/register` → `device_authorization` → 轮询 `token`），
+    注册固定带 `issuerUrl = https://identitycenter.amazonaws.com/ssoins-722374e8c3c8e6c6`，
+    缺了它授权页会回「无法验证您的登录凭证」。
+  - `idc` 必须同时给 `startUrl`（`https://<org>.awsapps.com/start`）与 `region`。
+  - `google` / `github` 走 Kiro 自己的设备码（`app.kiro.dev/account/device`）。
+  - 三种导入方式不发网络请求，`state` 直接是 `success`，凭据在同一个响应里落库。
+  - `LoginView = { id, method, region?, state, userCode?, verificationUri?, verificationUriComplete?, interval?, expiresAt?, error? }`，
+    `state` ∈ `pending` | `success` | `error` | `expired` | `denied` | `cancelled`。
+- `POST /kiro-proxy/api/login/poll` `{ id }` -> `{ ok, value: LoginView, status? }`
+- `POST /kiro-proxy/api/login/cancel` `{ id }` -> `{ ok, value: { id, state } }`
 - `POST /kiro-proxy/api/proxy-key` -> 生成/轮换本机反代 API key
 
 `Status = {

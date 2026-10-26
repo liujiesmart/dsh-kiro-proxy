@@ -2,16 +2,20 @@
  * dsh-kiro-proxy — Harness Web UI 客户端模块。
  *
  * 两个座位（slot）：
- * - `settings.section`：完整的 Kiro Proxy 设置页（用量、账号配置、模型勾选、代理信息、连接配置、导入）。
+ * - `settings.section`：完整的 Kiro Proxy 设置页，版式对齐 dsh-kiro 的 Settings → Kiro：
+ *   标题 + 刷新、账号卡、登录流程（选择方式 → 填表 → 验证码 → 失败重来）、模型卡、
+ *   用量卡、代理卡、连接配置卡、错误列表。单列、最大宽度 840px。
  * - `conversation.input.right`：输入框右侧的配额徽标，只显示“最紧那一行”的剩余比例。
  *
  * 设计约束（为什么这么写）：
- * - 唯一数据来源是 Host 的 `GET /kiro-proxy/api/status`（见 docs/CONTRACT.md 第 5 节）。
+ * - 唯一数据来源是 Host 的 `/kiro-proxy/api/*`（见 docs/CONTRACT.md 第 5 节）。
  *   UI 不碰 Host Service、不读别人的 DOM，所以宿主换内部实现时这里不用改。
  * - 无构建、无 npm 依赖：只用 `require('react')` 拿宿主的 React 实例，
  *   避免页面里出现第二份 React。
  * - 所有副作用（样式表）都走 `ctx.effect` 并返回 disposer，插件卸载/热重载后不留孤儿节点。
  * - 所有 fetch 失败都渲染成一行错误文字：设置页不该因为一次网络抖动整块白屏。
+ * - 登录流程不用 overlay 弹层，而是账号卡下面的一块面板：设置区本来就窄，
+ *   弹层会挡住用户正在核对的账号列表，而验证码恰恰要和账号信息一起看。
  */
 window.__ModuleLoader__.load({
   id: 'dsh-kiro-proxy',
@@ -41,6 +45,9 @@ window.__ModuleLoader__.load({
     /** 样式节点 id：幂等注入的钥匙，也是卸载时精确移除的句柄。 */
     const STYLE_ID = 'dsh-kiro-proxy-style'
 
+    /** 登录表单的空白初值。整体替换而不是就地改写，避免跨方法串数据。 */
+    const EMPTY_CONNECT_FIELDS = { startUrl: '', region: '', label: '', token: '', key: '', json: '' }
+
     // ── 文案 ────────────────────────────────────────────────────────────────
     // 两份字典都注册给宿主：宿主语言切换时由 locale 服务挑，插件不自己判断语言。
     const en = {
@@ -67,9 +74,50 @@ window.__ModuleLoader__.load({
       sourceManaged: 'Managed by dsh-kiro-proxy',
       sourceKiroCache: 'Kiro IDE / CLI sign-in',
       sourceNone: 'Not signed in',
+      signedInAs: 'Signed in as',
       stateReady: 'Ready',
       stateRefresh: 'Refreshes on next use',
       stateSignin: 'Needs sign-in',
+
+      connect: 'Connect',
+      connectTitle: 'Add account',
+      chooseMethod: 'Choose a sign-in method',
+      recommended: 'Recommended',
+      close: 'Close',
+      back: 'Back',
+      startLogin: 'Start sign-in',
+      saveImport: 'Save',
+      pendingTitle: 'Waiting for authorization',
+      errorTitle: 'Sign-in failed',
+      code: 'Code',
+      openLoginPage: 'Open sign-in page',
+      cancel: 'Cancel',
+      waiting: 'Waiting for approval…',
+      restart: 'Start over',
+      connectDone: 'Signed in. The new account is now selected.',
+      methodBuilderId: 'AWS Builder ID',
+      methodBuilderIdDesc: 'Personal AWS account. Approves this browser on the AWS device page.',
+      methodIdc: 'IAM Identity Center',
+      methodIdcDesc: 'Organization access portal. Needs the start URL and the Identity Center region.',
+      methodGoogle: 'Google',
+      methodGoogleDesc: 'Sign in with the Google account already linked to Kiro.',
+      methodGithub: 'GitHub',
+      methodGithubDesc: 'Sign in with the GitHub account already linked to Kiro.',
+      methodRefreshToken: 'Import refresh token',
+      methodRefreshTokenDesc: 'Paste a Kiro refresh token copied from another machine.',
+      methodApiKey: 'Import API key',
+      methodApiKeyDesc: 'Paste a Kiro API key; it is sent as a bearer token.',
+      methodExternalIdp: 'Microsoft Entra / external IdP',
+      methodExternalIdpDesc: 'Paste the external IdP credential JSON.',
+      label: 'Label (optional)',
+      startUrl: 'Start URL',
+      regionPlain: 'Region',
+      token: 'Refresh token',
+      jsonInput: 'Credential JSON',
+      idcMissing: 'Enter both the start URL and the region.',
+      tokenRequired: 'Paste the refresh token first.',
+      keyRequired: 'Paste the API key first.',
+      jsonRequired: 'Paste the credential JSON first.',
 
       models: 'Models',
       modelsHint: 'Only checked models are offered to sessions and to the proxy.',
@@ -95,21 +143,12 @@ window.__ModuleLoader__.load({
       rotateKey: 'Rotate key',
 
       connection: 'Connection',
-      addAccount: 'Add account',
       proxyUrl: 'Proxy URL (optional)',
       region: 'AWS region (optional)',
       profileArn: 'Profile ARN (optional)',
       maxContextWindow: 'Max context window (optional)',
       maxContextHint: 'Empty follows each model. A smaller number spends fewer tokens per turn.',
       maxContextInvalid: 'Enter a positive integer token count, or leave it empty.',
-
-      importTitle: 'Import credentials',
-      importHint: 'Paste one of: a credential JSON, a Kiro refresh token, or a Kiro API key.',
-      credentialText: 'Credential',
-      label: 'Label (optional)',
-      importJson: 'Import JSON',
-      importRefresh: 'Import refresh token',
-      importApiKey: 'Import API key',
 
       errors: 'Errors',
       quotaTitle: 'Kiro quota',
@@ -140,9 +179,50 @@ window.__ModuleLoader__.load({
       sourceManaged: '由 dsh-kiro-proxy 托管',
       sourceKiroCache: 'Kiro IDE / CLI 登录',
       sourceNone: '未登录',
+      signedInAs: '已登录为',
       stateReady: '可用',
       stateRefresh: '下次使用时刷新',
       stateSignin: '需要登录',
+
+      connect: '连接',
+      connectTitle: '添加账号',
+      chooseMethod: '选择登录方式',
+      recommended: '推荐',
+      close: '关闭',
+      back: '返回',
+      startLogin: '开始登录',
+      saveImport: '保存',
+      pendingTitle: '等待授权',
+      errorTitle: '登录失败',
+      code: '验证码',
+      openLoginPage: '打开登录页',
+      cancel: '取消',
+      waiting: '等待授权…',
+      restart: '重新开始',
+      connectDone: '登录成功，新账号已设为当前账号。',
+      methodBuilderId: 'AWS Builder ID',
+      methodBuilderIdDesc: '个人 AWS 账号，在 AWS 设备页批准本浏览器即可。',
+      methodIdc: 'IAM 身份中心',
+      methodIdcDesc: '组织访问门户。需要填写起始 URL 与身份中心实例所在区域。',
+      methodGoogle: 'Google',
+      methodGoogleDesc: '使用已绑定 Kiro 的 Google 账号登录。',
+      methodGithub: 'GitHub',
+      methodGithubDesc: '使用已绑定 Kiro 的 GitHub 账号登录。',
+      methodRefreshToken: '导入 refresh token',
+      methodRefreshTokenDesc: '粘贴从其他机器复制来的 Kiro refresh token。',
+      methodApiKey: '导入 API Key',
+      methodApiKeyDesc: '粘贴 Kiro API Key，作为 bearer token 使用。',
+      methodExternalIdp: 'Microsoft Entra / 外部 IdP',
+      methodExternalIdpDesc: '粘贴外部 IdP 的凭据 JSON。',
+      label: '标签（可选）',
+      startUrl: '起始 URL',
+      regionPlain: '区域',
+      token: 'Refresh token',
+      jsonInput: '凭据 JSON',
+      idcMissing: '请同时填写起始 URL 和区域。',
+      tokenRequired: '请先粘贴 refresh token。',
+      keyRequired: '请先粘贴 API Key。',
+      jsonRequired: '请先粘贴凭据 JSON。',
 
       models: '模型',
       modelsHint: '只有勾选的模型会提供给会话和反向代理。',
@@ -168,21 +248,12 @@ window.__ModuleLoader__.load({
       rotateKey: '轮换 Key',
 
       connection: '连接配置',
-      addAccount: '添加账号',
       proxyUrl: '代理地址（可选）',
       region: 'AWS 区域（可选）',
       profileArn: 'Profile ARN（可选）',
       maxContextWindow: '最大上下文窗口（可选）',
       maxContextHint: '留空则跟随各模型；数值越小，每轮消耗的 token 越少。',
       maxContextInvalid: '请输入正整数 token 数，或留空。',
-
-      importTitle: '导入凭据',
-      importHint: '粘贴以下之一：凭据 JSON、Kiro refresh token、Kiro API key。',
-      credentialText: '凭据内容',
-      label: '标签（可选）',
-      importJson: '导入 JSON',
-      importRefresh: '导入 refresh token',
-      importApiKey: '导入 API key',
 
       errors: '错误',
       quotaTitle: 'Kiro 配额',
@@ -212,6 +283,11 @@ window.__ModuleLoader__.load({
         const dictionary = isEnglish ? en : zh
         return dictionary[key] ?? zh[key] ?? en[key] ?? key
       }
+    }
+
+    /** 任何被 throw 出来的东西都折成一行可读文字。 */
+    function messageOf(cause) {
+      return cause && cause.message ? cause.message : String(cause)
     }
 
     // ── 网络 ────────────────────────────────────────────────────────────────
@@ -324,6 +400,7 @@ window.__ModuleLoader__.load({
 .dshkp-title{margin:0;font-size:19px;font-weight:650;letter-spacing:-.01em}
 .dshkp-desc{margin:6px 0 16px;color:var(--dsw-alias-label-secondary,#cfd3d6)}
 .dshkp-card{margin:0 0 12px;padding:14px 16px;border:1px solid var(--dsw-alias-border-l2,rgba(255,255,255,.12));border-radius:12px;background:var(--dsw-alias-settings-card-fill,var(--dsw-alias-bg-layer-2,#1b1b1f))}
+.dshkp-connect{background:var(--dsw-alias-bg-layer-1,rgba(0,0,0,.18))}
 .dshkp-card-head{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:10px;min-height:24px}
 .dshkp-card-title{font-size:13px;font-weight:650;letter-spacing:.01em}
 .dshkp-actions{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
@@ -337,13 +414,9 @@ window.__ModuleLoader__.load({
 .dshkp-error{margin:0 0 12px;padding:8px 10px;border:1px solid var(--dsw-alias-state-error-secondary,rgba(239,68,68,.45));border-radius:9px;background:var(--dsw-alias-interactive-bg-hover-danger,rgba(239,68,68,.1));color:var(--dsw-alias-state-error-primary,#ef4444);font-size:12px;word-break:break-word}
 .dshkp-notice{margin:0 0 12px;padding:8px 10px;border:1px solid var(--dsw-alias-state-success-secondary,rgba(34,197,94,.4));border-radius:9px;background:var(--dsw-alias-interactive-bg-hover,rgba(34,197,94,.1));color:var(--dsw-alias-state-success-primary,#22c55e);font-size:12px}
 .dshkp-empty{padding:6px 0;color:var(--dsw-alias-label-tertiary,#adb2b8);font-size:12px}
-.dshkp-details{margin:0 0 12px}
-.dshkp-summary{cursor:pointer;list-style:none;display:inline-flex;align-items:center;gap:6px;padding:6px 11px;border:1px solid var(--dsw-alias-border-l2,rgba(255,255,255,.12));border-radius:8px;color:var(--dsw-alias-label-primary,#f9fafb);font-size:12px;line-height:18px;user-select:none}
-.dshkp-summary::-webkit-details-marker{display:none}
-.dshkp-summary::before{content:'+';font-family:ui-monospace,Menlo,monospace;color:var(--dsw-alias-label-secondary,#cfd3d6)}
-.dshkp-details[open] .dshkp-summary::before{content:'−'}
-.dshkp-summary:hover{background:var(--dsw-alias-interactive-bg-hover,rgba(255,255,255,.07))}
-.dshkp-details[open] .dshkp-card{margin-top:10px}
+.dshkp-status-line{display:flex;align-items:center;gap:6px;margin:0 0 10px;font-size:12px;color:var(--dsw-alias-label-secondary,#cfd3d6)}
+.dshkp-dot{flex:none;width:6px;height:6px;border-radius:50%;background:var(--dsw-alias-state-idle-primary,#9ca3af)}
+.dshkp-dot-on{background:var(--dsw-alias-state-success-primary,#22c55e)}
 .dshkp-list{display:grid;gap:8px}
 .dshkp-row{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:9px 10px;border:1px solid var(--dsw-alias-border-l1,rgba(255,255,255,.07));border-radius:9px}
 .dshkp-row-active{border-color:var(--dsw-alias-brand-primary,rgba(99,102,241,.7));background:var(--dsw-alias-fill-l1,rgba(99,102,241,.1))}
@@ -358,6 +431,29 @@ window.__ModuleLoader__.load({
 .dshkp-state-ready::before{background:var(--dsw-alias-state-success-primary,#22c55e)}
 .dshkp-state-refresh::before{background:var(--dsw-alias-state-warn-primary,#f59e0b)}
 .dshkp-state-signin::before{background:var(--dsw-alias-state-error-primary,#ef4444)}
+.dshkp-chooser-copy{margin:0 0 10px;font-size:12px;color:var(--dsw-alias-label-tertiary,#adb2b8)}
+.dshkp-methods{display:grid;gap:8px}
+.dshkp-method{display:flex;align-items:flex-start;gap:11px;width:100%;padding:10px 12px;border:1px solid var(--dsw-alias-border-l2,rgba(255,255,255,.12));border-radius:10px;background:transparent;color:inherit;font-family:inherit;text-align:left;cursor:pointer;transition:border-color .15s,background .15s}
+.dshkp-method:hover:not(:disabled){border-color:var(--dsw-alias-brand-primary,rgba(99,102,241,.7));background:var(--dsw-alias-interactive-bg-hover,rgba(255,255,255,.06))}
+.dshkp-method:disabled{cursor:not-allowed;opacity:.55}
+.dshkp-method-icon{display:grid;place-items:center;flex:none;width:34px;height:34px;border-radius:9px;background:var(--dsw-alias-fill-l2,rgba(255,255,255,.08));color:var(--dsw-alias-label-secondary,#cfd3d6);font-size:10.5px;font-weight:700;letter-spacing:.02em}
+.dshkp-method-main{min-width:0;flex:1;display:grid;gap:3px}
+.dshkp-method-title{display:flex;align-items:center;gap:7px;font-size:12.5px;font-weight:650;color:var(--dsw-alias-label-primary,#f9fafb)}
+.dshkp-method-desc{font-size:11px;line-height:16px;color:var(--dsw-alias-label-tertiary,#adb2b8)}
+.dshkp-chevron{align-self:center;color:var(--dsw-alias-label-tertiary,#adb2b8);font-size:18px;line-height:1}
+.dshkp-step-head{display:flex;align-items:center;gap:9px;margin-bottom:12px}
+.dshkp-back{padding:4px 8px}
+.dshkp-step-title{font-size:13px;font-weight:650}
+.dshkp-code{margin:0 0 10px;padding:11px 12px;border:1px solid var(--dsw-alias-border-l2,rgba(255,255,255,.12));border-radius:10px;background:var(--dsw-alias-bg-layer-1,rgba(0,0,0,.2))}
+.dshkp-code-row{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.dshkp-code-label{font-size:11.5px;color:var(--dsw-alias-label-tertiary,#adb2b8)}
+.dshkp-code-value{padding:2px 10px;border-radius:7px;background:var(--dsw-alias-fill-l2,rgba(255,255,255,.08));font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:17px;font-weight:650;letter-spacing:.14em;color:var(--dsw-alias-label-primary,#f9fafb)}
+.dshkp-working{font-size:12px;color:var(--dsw-alias-label-secondary,#cfd3d6)}
+.dshkp-close{padding:0 6px;border:0;border-radius:6px;background:transparent;color:var(--dsw-alias-label-tertiary,#adb2b8);font-family:inherit;font-size:17px;line-height:20px;cursor:pointer}
+.dshkp-close:hover{background:var(--dsw-alias-interactive-bg-hover,rgba(255,255,255,.07));color:var(--dsw-alias-label-primary,#f9fafb)}
+.dshkp-link-btn{padding:0;border:0;background:transparent;color:var(--dsw-alias-label-secondary,#cfd3d6);font-family:inherit;font-size:11.5px;line-height:18px;cursor:pointer;text-decoration:underline;text-underline-offset:2px}
+.dshkp-link-btn:hover:not(:disabled){color:var(--dsw-alias-label-primary,#f9fafb)}
+.dshkp-link-btn:disabled{opacity:.5;cursor:not-allowed}
 .dshkp-model{display:flex;align-items:flex-start;gap:9px;padding:6px 8px;border-radius:8px;cursor:pointer}
 .dshkp-model:hover{background:var(--dsw-alias-interactive-bg-hover,rgba(255,255,255,.05))}
 .dshkp-model-off{opacity:.55}
@@ -392,6 +488,7 @@ window.__ModuleLoader__.load({
 .dshkp-input:focus{outline:none;border-color:var(--dsw-alias-brand-primary,#4f46e5)}
 .dshkp-textarea{min-height:74px;resize:vertical;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11.5px}
 .dshkp-hint{margin:6px 0 0;font-size:11px;color:var(--dsw-alias-label-tertiary,#adb2b8)}
+a.dshkp-btn{text-decoration:none;display:inline-block}
 .dshkp-errors{margin:0;padding-left:18px;font-size:12px;color:var(--dsw-alias-state-error-primary,#ef4444);word-break:break-word}
 .dshkp-quota{display:inline-flex;align-items:center;gap:6px;padding:3px 9px;border:1px solid var(--dsw-alias-border-l2,rgba(255,255,255,.12));border-radius:999px;background:transparent;color:var(--dsw-alias-label-secondary,#cfd3d6);font-family:inherit;font-size:11px;line-height:16px;white-space:nowrap;cursor:pointer}
 .dshkp-quota:hover:not(:disabled){background:var(--dsw-alias-interactive-bg-hover,rgba(255,255,255,.07))}
@@ -429,6 +526,8 @@ window.__ModuleLoader__.load({
      *
      * 一个 `status` 就是全部真相：所有操作都是“POST → 拿回新 status → 覆盖 state”，
      * 不做本地乐观更新，因为账号/模型/用量的真实结果只有 Host 知道。
+     * 登录流程是唯一的例外：设备码登录是 Host 侧的一个会话，状态在 `login` 里，
+     * 成功那一步才把新 status 取回来。
      */
     function KiroProxySettings({ ctx }) {
       const t = useMemo(() => translator(ctx), [ctx])
@@ -438,8 +537,14 @@ window.__ModuleLoader__.load({
       const [busy, setBusy] = useState('')
       const [copied, setCopied] = useState('')
       const [draft, setDraft] = useState({ proxyUrl: '', region: '', profileArn: '', maxContextWindow: '' })
-      const [importText, setImportText] = useState('')
-      const [importLabel, setImportLabel] = useState('')
+      // 登录流程：connectOpen=false 时整块不渲染；method 为空表示停在「选择登录方式」。
+      const [connectOpen, setConnectOpen] = useState(false)
+      const [method, setMethod] = useState('')
+      const [fields, setFields] = useState(EMPTY_CONNECT_FIELDS)
+      // 进行中的设备码登录：LoginView（{ id, method, state, userCode, verificationUri* }）。
+      const [login, setLogin] = useState(undefined)
+      // 登录/导入这一步自己的错误：它属于流程内部，不该顶掉页头的错误行。
+      const [loginError, setLoginError] = useState('')
 
       // 组件卸载后 setState 是 React 的告警来源，也是真实的泄漏路径。
       // 这里用 `alive` 标志而不是 ctx.effect：ctx.effect 的生命周期是“插件加载到卸载”，
@@ -461,7 +566,7 @@ window.__ModuleLoader__.load({
           return body.value
         } catch (cause) {
           // 一行错误文字，不抛异常：设置页在白屏和崩溃之间必须选前者。
-          if (alive.current) setError(cause && cause.message ? cause.message : String(cause))
+          if (alive.current) setError(messageOf(cause))
           return undefined
         }
       }, [])
@@ -511,6 +616,44 @@ window.__ModuleLoader__.load({
         return () => window.clearTimeout(timer)
       }, [copied])
 
+      // 轮询节奏跟着服务端给的 interval 走（slow_down 会把它调大）；Host 侧也会拦住过早的轮询。
+      // 只在 pending 时挂计时器：成功/失败/取消后不再问 AWS。
+      // 单个 setTimeout（不是 setInterval）保证不会重叠：上一轮落定后 state 变化重挂下一次。
+      const loginId = login && login.state === 'pending' ? String(login.id || '') : ''
+      const loginInterval = login && Number.isFinite(login.interval) ? Math.max(1, login.interval) : 5
+      useEffect(() => {
+        if (loginId === '') return undefined
+        let cancelled = false
+        const timer = window.setTimeout(() => {
+          void request('/login/poll', { method: 'POST', body: JSON.stringify({ id: loginId }) })
+            .then((body) => {
+              if (!alive.current || cancelled) return
+              const view = body.value || {}
+              setLogin(view)
+              if (view.state === 'success') {
+                setConnectOpen(false)
+                setMethod('')
+                setLogin(undefined)
+                setLoginError('')
+                setFields(EMPTY_CONNECT_FIELDS)
+                setNotice(t('connectDone'))
+                if (body.status) setStatus(body.status)
+                else void load()
+              }
+            })
+            .catch((cause) => {
+              if (!alive.current || cancelled) return
+              // 轮询失败＝这次登录结束了：不重试，直接把可读的错误留在面板上。
+              setLogin(undefined)
+              setLoginError(messageOf(cause))
+            })
+        }, loginInterval * 1000)
+        return () => {
+          cancelled = true
+          window.clearTimeout(timer)
+        }
+      }, [loginId, loginInterval, login, load, t])
+
       /** 统一的操作外壳：置忙、清错、成功后覆盖 status、失败只写一行错误。 */
       const run = useCallback(async (label, action) => {
         if (alive.current) { setBusy(label); setError('') }
@@ -519,7 +662,7 @@ window.__ModuleLoader__.load({
           if (alive.current && next) setStatus(next)
           return next
         } catch (cause) {
-          if (alive.current) setError(cause && cause.message ? cause.message : String(cause))
+          if (alive.current) setError(messageOf(cause))
           return undefined
         } finally {
           if (alive.current) setBusy('')
@@ -591,30 +734,13 @@ window.__ModuleLoader__.load({
       }, [draft, run, t])
 
       const rotateKey = useCallback(() => run('key', async () => {
-        await request('/proxy-key', { method: 'POST', body: JSON.stringify({}) })
-        const body = await request('/status')
-        return body.value
+        const body = await request('/proxy-key', { method: 'POST', body: JSON.stringify({}) })
+        // /proxy-key 只回 { key }，所以整份 status 要重读：代理卡里的三个字段都要更新。
+        const next = body && body.status
+        if (next) return next
+        const after = await request('/status')
+        return after.value
       }), [run])
-
-      /**
-       * 导入凭据。
-       * 三个按钮共用一个 textarea：用户手里可能是 JSON、refresh token 或 API key，
-       * 由按钮决定这次粘贴按哪种语义解释，避免让用户先选“类型”再粘贴。
-       */
-      const importCredential = useCallback((kind) => {
-        const value = importText.trim()
-        if (value === '') return Promise.resolve(undefined)
-        const payload = { label: importLabel.trim() || undefined }
-        if (kind === 'json') payload.json = value
-        else if (kind === 'refresh') payload.refreshToken = value
-        else payload.apiKey = value
-        return run(`import:${kind}`, async () => {
-          const body = await request('/accounts/import', { method: 'POST', body: JSON.stringify(payload) })
-          const next = await valueOrStatus(body)
-          if (alive.current) { setImportText(''); setNotice(t('saved')) }
-          return next
-        })
-      }, [importText, importLabel, run, t])
 
       const copy = useCallback(async (id, value) => {
         try {
@@ -624,9 +750,124 @@ window.__ModuleLoader__.load({
           await navigator.clipboard.writeText(String(value))
           if (alive.current) { setCopied(id); setNotice(t('copied')) }
         } catch (cause) {
-          if (alive.current) setError(cause && cause.message ? cause.message : String(cause))
+          if (alive.current) setError(messageOf(cause))
         }
       }, [t])
+
+      // ── 登录流程（chooser → form → pending → error）──
+
+      /**
+       * 放弃一个还在等授权的设备码会话。
+       *
+       * 设备码流程在 Host 侧是一个真实会话：面板关掉/重开却不取消它，它就一直在
+       * 等到过期（还会占着 AWS 的轮询配额）。取消是尽力而为，不等结果也不报错。
+       */
+      const cancelPending = (view) => {
+        if (view && view.state === 'pending' && view.id) {
+          void request('/login/cancel', { method: 'POST', body: JSON.stringify({ id: view.id }) }).catch(() => {})
+        }
+      }
+
+      const openConnect = useCallback(() => {
+        cancelPending(login)
+        setConnectOpen(true)
+        setMethod('')
+        setFields(EMPTY_CONNECT_FIELDS)
+        setLogin(undefined)
+        setLoginError('')
+        setError('')
+      }, [login])
+
+      /**
+       * 关掉登录面板。
+       * “关闭”和“取消”是同一个动作：pending 时一并取消 Host 侧会话。
+       */
+      const closeConnect = useCallback(() => {
+        cancelPending(login)
+        setConnectOpen(false)
+        setMethod('')
+        setLogin(undefined)
+        setLoginError('')
+        setFields(EMPTY_CONNECT_FIELDS)
+      }, [login])
+
+      const chooseMethod = useCallback((id) => {
+        setMethod(id)
+        setFields(EMPTY_CONNECT_FIELDS)
+        setLogin(undefined)
+        setLoginError('')
+        setError('')
+      }, [])
+
+      const backToChooser = useCallback(() => {
+        setMethod('')
+        setFields(EMPTY_CONNECT_FIELDS)
+        setLogin(undefined)
+        setLoginError('')
+        setError('')
+      }, [])
+
+      /**
+       * 发起一次登录/导入。
+       *
+       * 七个方法共用一条通道：`/login/start` 的 body 由 method 决定，
+       * 导入类三个方法 Host 可能直接回 `state:'success'`，此时跳过 pending 直接收尾。
+       */
+      const startLogin = useCallback(async () => {
+        const active = method
+        if (active === '' || busy !== '') return undefined
+        const payload = { method: active }
+        if (active === 'idc') {
+          const startUrl = String(fields.startUrl || '').trim()
+          const region = String(fields.region || '').trim()
+          if (startUrl === '' || region === '') { setError(t('idcMissing')); return undefined }
+          payload.startUrl = startUrl
+          payload.region = region
+        } else if (active === 'refresh-token') {
+          const token = String(fields.token || '').trim()
+          if (token === '') { setError(t('tokenRequired')); return undefined }
+          payload.secret = token
+        } else if (active === 'api-key') {
+          const key = String(fields.key || '').trim()
+          if (key === '') { setError(t('keyRequired')); return undefined }
+          payload.secret = key
+        } else if (active === 'external-idp') {
+          const json = String(fields.json || '').trim()
+          if (json === '') { setError(t('jsonRequired')); return undefined }
+          payload.json = json
+        }
+        const label = String(fields.label || '').trim()
+        if (label !== '') payload.label = label
+
+        if (alive.current) { setBusy('login'); setError(''); setLoginError('') }
+        try {
+          const body = await request('/login/start', { method: 'POST', body: JSON.stringify(payload) })
+          const view = body.value || {}
+          if (!alive.current) return view
+          if (view.state === 'success') {
+            // 导入类方法：凭据已经存好，不需要用户再看一个假的“等待授权”。
+            setConnectOpen(false)
+            setMethod('')
+            setLogin(undefined)
+            setLoginError('')
+            setFields(EMPTY_CONNECT_FIELDS)
+            setNotice(t('connectDone'))
+            if (body.status) setStatus(body.status)
+            else {
+              const after = await request('/status')
+              if (alive.current) setStatus(after.value)
+            }
+            return view
+          }
+          setLogin(view)
+          return view
+        } catch (cause) {
+          if (alive.current) { setLogin(undefined); setLoginError(messageOf(cause)) }
+          return undefined
+        } finally {
+          if (alive.current) setBusy('')
+        }
+      }, [busy, fields, method, t])
 
       // ── 渲染辅助 ──
       const card = (key, title, actions, body) => h('section', { className: 'dshkp-card', key },
@@ -635,7 +876,7 @@ window.__ModuleLoader__.load({
           actions === null || actions === undefined ? null : h('div', { className: 'dshkp-actions' }, actions)),
         body)
 
-      // 连接配置全是单行输入；多行的凭据输入有自己独立的状态（importText），
+      // 连接配置全是单行输入；登录表单的输入有自己独立的状态（fields），
       // 因为它不该被 status 轮询重置，所以不共用这个 draft。
       const field = (name, label, options) => {
         const opts = options || {}
@@ -651,6 +892,24 @@ window.__ModuleLoader__.load({
           }))
       }
 
+      const connectField = (name, label, options) => {
+        const opts = options || {}
+        const value = fields[name] === undefined ? '' : fields[name]
+        const onChange = (event) => setFields(current => ({ ...current, [name]: event.target.value }))
+        const control = opts.textarea
+          ? h('textarea', {
+              className: 'dshkp-input dshkp-textarea', value, placeholder: opts.placeholder,
+              spellCheck: false, onChange,
+            })
+          : h('input', {
+              className: 'dshkp-input', type: opts.type || 'text', value, placeholder: opts.placeholder,
+              spellCheck: false, autoComplete: 'off', onChange,
+            })
+        return h('label', { className: `dshkp-field${opts.wide ? ' dshkp-field-wide' : ''}`, key: name },
+          h('span', null, label),
+          control)
+      }
+
       const stateLabel = (value) => value === 'ready'
         ? t('stateReady')
         : value === 'refresh' ? t('stateRefresh') : t('stateSignin')
@@ -661,8 +920,40 @@ window.__ModuleLoader__.load({
 
       const busyLabel = (key, idle) => (busy === key ? t('working') : idle)
 
+      // ── 登录方式清单 ──
+      // 顺序即引导顺序：个人用户第一行就能点，企业/IAM 靠后，导入类垫底。
+      const methodChoices = [
+        { id: 'builder-id', icon: 'AWS', title: t('methodBuilderId'), description: t('methodBuilderIdDesc'), recommended: true },
+        { id: 'idc', icon: 'SSO', title: t('methodIdc'), description: t('methodIdcDesc') },
+        { id: 'google', icon: 'G', title: t('methodGoogle'), description: t('methodGoogleDesc') },
+        { id: 'github', icon: 'GH', title: t('methodGithub'), description: t('methodGithubDesc') },
+        { id: 'refresh-token', icon: '↻', title: t('methodRefreshToken'), description: t('methodRefreshTokenDesc') },
+        { id: 'api-key', icon: 'KEY', title: t('methodApiKey'), description: t('methodApiKeyDesc') },
+        { id: 'external-idp', icon: '{}', title: t('methodExternalIdp'), description: t('methodExternalIdpDesc') },
+      ]
+      const methodTitle = (id) => {
+        const found = methodChoices.find(choice => choice.id === id)
+        return found ? found.title : (id || t('connectTitle'))
+      }
+      const importMethod = method === 'refresh-token' || method === 'api-key' || method === 'external-idp'
+      const loginState = login ? String(login.state || '') : ''
+      // 流程步：pending 优先（它带着设备码），其次任何失败，最后才是 chooser / form。
+      const connectStep = connectOpen === false
+        ? 'closed'
+        : login !== undefined && loginState === 'pending' ? 'pending'
+        : login !== undefined && loginState !== 'success' ? 'error'
+        : loginError !== '' ? 'error'
+        : method === '' ? 'chooser' : 'form'
+
       // ── 账号卡 ──
       const accounts = status && Array.isArray(status.accounts) ? status.accounts : []
+      const activeAccount = accounts.find(account => account && account.active === true)
+      const statusLine = h('div', { className: 'dshkp-status-line' },
+        h('span', { className: `dshkp-dot${activeAccount ? ' dshkp-dot-on' : ''}` }),
+        h('span', null, activeAccount
+          ? `${t('signedInAs')} ${activeAccount.label || activeAccount.id || t('unknown')}`
+          : `${t('credentialSource')}: ${sourceLabel(status && status.credentialSource)}`))
+
       const accountsBody = accounts.length === 0
         ? h('div', { className: 'dshkp-empty' }, t('noAccounts'))
         : h('div', { className: 'dshkp-list' }, accounts.map(account => h('div', {
@@ -692,17 +983,126 @@ window.__ModuleLoader__.load({
       const accountsCard = card('accounts', t('accounts'),
         h(React.Fragment, null,
           h('button', {
-            className: 'dshkp-btn', type: 'button', disabled: busy !== '' || accounts.length === 0,
-            onClick: () => { void signOutAll() },
-          }, busyLabel('signout', t('signOutAll'))),
+            className: 'dshkp-btn dshkp-primary', type: 'button',
+            disabled: busy !== '',
+            onClick: openConnect,
+          }, t('connect')),
           h('button', {
             className: 'dshkp-btn', type: 'button', disabled: busy !== '',
             onClick: () => { void refresh() },
-          }, busyLabel('refresh', t('refresh')))),
+          }, busyLabel('refresh', t('refreshUsage'))),
+          h('button', {
+            className: 'dshkp-btn', type: 'button', disabled: busy !== '' || accounts.length === 0,
+            onClick: () => { void signOutAll() },
+          }, busyLabel('signout', t('signOutAll')))),
         h(React.Fragment, null,
-          h('div', { className: 'dshkp-row-sub', style: { marginBottom: '8px' } },
-            h('span', null, `${t('credentialSource')}: ${sourceLabel(status && status.credentialSource)}`)),
+          statusLine,
           accountsBody))
+
+      // ── 登录流程卡（面板内滚动，不遮挡账号列表）──
+      const chooserBody = h(React.Fragment, null,
+        h('p', { className: 'dshkp-chooser-copy' }, t('chooseMethod')),
+        h('div', { className: 'dshkp-methods' }, methodChoices.map(choice => h('button', {
+          className: 'dshkp-method',
+          type: 'button',
+          key: choice.id,
+          'data-method': choice.id,
+          disabled: busy !== '',
+          onClick: () => chooseMethod(choice.id),
+        },
+        h('span', { className: 'dshkp-method-icon', 'aria-hidden': 'true' }, choice.icon),
+        h('span', { className: 'dshkp-method-main' },
+          h('span', { className: 'dshkp-method-title' }, choice.title,
+            choice.recommended ? h('span', { className: 'dshkp-badge dshkp-badge-active' }, t('recommended')) : null),
+          h('span', { className: 'dshkp-method-desc' }, choice.description)),
+        h('span', { className: 'dshkp-chevron', 'aria-hidden': 'true' }, '›')))))
+
+      // 每个方法的输入集合：只有 IdC 必填两项，导入类三项各缺一不可，其余不需要输入。
+      let methodFields = null
+      if (method === 'idc') {
+        methodFields = h('div', { className: 'dshkp-grid' },
+          connectField('startUrl', t('startUrl'), {
+            wide: true, type: 'url', placeholder: 'https://my-org.awsapps.com/start',
+          }),
+          connectField('region', t('regionPlain'), { placeholder: 'us-east-1' }))
+      } else if (method === 'refresh-token') {
+        methodFields = h(React.Fragment, null,
+          connectField('token', t('token'), { wide: true, textarea: true }),
+          connectField('label', t('label')))
+      } else if (method === 'api-key') {
+        methodFields = h(React.Fragment, null,
+          connectField('key', t('apiKey'), { wide: true, type: 'password' }),
+          connectField('label', t('label')))
+      } else if (method === 'external-idp') {
+        methodFields = h(React.Fragment, null,
+          connectField('json', t('jsonInput'), { wide: true, textarea: true }),
+          connectField('label', t('label')))
+      }
+
+      const formBody = h(React.Fragment, null,
+        h('div', { className: 'dshkp-step-head' },
+          h('button', {
+            className: 'dshkp-btn dshkp-back', type: 'button', disabled: busy !== '',
+            onClick: backToChooser,
+          }, `‹ ${t('back')}`),
+          h('div', { className: 'dshkp-step-title' }, methodTitle(method))),
+        methodFields === null ? null : h('div', { className: 'dshkp-form' }, methodFields),
+        h('div', { className: 'dshkp-actions', style: { marginTop: '12px' } },
+          h('button', {
+            className: 'dshkp-btn dshkp-primary', type: 'button', disabled: busy !== '',
+            onClick: () => { void startLogin() },
+          }, busy === 'login' ? t('working') : importMethod ? t('saveImport') : t('startLogin'))))
+
+      const pendingUri = login ? (login.verificationUriComplete || login.verificationUri) : undefined
+      const pendingBody = h(React.Fragment, null,
+        h('div', { className: 'dshkp-step-head' },
+          h('button', {
+            className: 'dshkp-btn dshkp-back', type: 'button', disabled: busy !== '',
+            onClick: closeConnect,
+          }, `‹ ${t('cancel')}`),
+          h('div', { className: 'dshkp-step-title' }, methodTitle(login && login.method))),
+        h('div', { className: 'dshkp-code', role: 'status', 'aria-live': 'polite' },
+          h('div', { className: 'dshkp-code-row' },
+            h('span', { className: 'dshkp-code-label' }, t('code')),
+            h('code', { className: 'dshkp-code-value' }, (login && login.userCode) || '—'),
+            h('button', {
+              className: 'dshkp-btn', type: 'button', disabled: !(login && login.userCode),
+              onClick: () => { void copy('login-code', login && login.userCode) },
+            }, copied === 'login-code' ? t('copied') : t('copy'))),
+          pendingUri === undefined || pendingUri === '' ? null : h('div', { className: 'dshkp-actions', style: { marginTop: '10px' } },
+            h('a', {
+              className: 'dshkp-btn dshkp-primary', href: pendingUri,
+              target: '_blank', rel: 'noopener noreferrer',
+            }, t('openLoginPage')))),
+        h('div', { className: 'dshkp-working' }, t('waiting')))
+
+      const errorBody = h(React.Fragment, null,
+        h('div', { className: 'dshkp-error', role: 'alert' },
+          (login && login.error) || loginError || t('failed')),
+        h('div', { className: 'dshkp-actions', style: { marginTop: '10px' } },
+          h('button', {
+            className: 'dshkp-btn dshkp-primary', type: 'button', disabled: busy !== '',
+            onClick: backToChooser,
+          }, t('restart'))))
+
+      // 卡片头只说明“现在在哪一步”，具体方法名在步骤头里（form 步会重复，所以这里不复述）。
+      const connectTitle = connectStep === 'pending'
+        ? t('pendingTitle')
+        : connectStep === 'error' ? t('errorTitle') : t('connectTitle')
+      const connectBody = connectStep === 'pending'
+        ? pendingBody
+        : connectStep === 'error' ? errorBody : connectStep === 'form' ? formBody : chooserBody
+
+      const connectCard = connectOpen === false
+        ? null
+        : h('section', { className: 'dshkp-card dshkp-connect', key: 'connect' },
+            h('div', { className: 'dshkp-card-head' },
+              h('div', { className: 'dshkp-card-title' }, connectTitle),
+              h('button', {
+                className: 'dshkp-close', type: 'button', title: t('close'), 'aria-label': t('close'),
+                onClick: closeConnect,
+              }, '×')),
+            connectBody)
 
       // ── 模型卡 ──
       const models = status && Array.isArray(status.models) ? status.models : []
@@ -734,11 +1134,11 @@ window.__ModuleLoader__.load({
         h(React.Fragment, null,
           h('span', { className: 'dshkp-count' }, `${enabledList.length}/${models.length} ${t('selected')}`),
           h('button', {
-            className: 'dshkp-btn', type: 'button', disabled: busy !== '' || models.length === 0,
+            className: 'dshkp-link-btn', type: 'button', disabled: busy !== '' || models.length === 0,
             onClick: () => { void setEnabledModels(models.map(model => model.id)) },
           }, t('selectAll')),
           h('button', {
-            className: 'dshkp-btn', type: 'button', disabled: busy !== '' || models.length === 0,
+            className: 'dshkp-link-btn', type: 'button', disabled: busy !== '' || models.length === 0,
             onClick: () => { void setEnabledModels([]) },
           }, t('selectNone'))),
         h(React.Fragment, null,
@@ -782,12 +1182,12 @@ window.__ModuleLoader__.load({
         h('button', {
           className: 'dshkp-btn', type: 'button', disabled: busy !== '',
           onClick: () => { void refresh() },
-        }, busyLabel('usage', t('refreshUsage'))),
+        }, busyLabel('refresh', t('refreshUsage'))),
         usageBody)
 
       // ── 代理卡 ──
       const proxy = status && status.proxy ? status.proxy : undefined
-      const kvRow = (id, key, label, value) => h('div', { className: 'dshkp-kv-row', key },
+      const kvRow = (id, label, value) => h('div', { className: 'dshkp-kv-row', key: id },
         h('span', { className: 'dshkp-kv-key' }, label),
         h('span', { className: 'dshkp-kv-value', title: value }, value || '—'),
         h('button', {
@@ -798,9 +1198,9 @@ window.__ModuleLoader__.load({
       const proxyBody = proxy === undefined
         ? h('div', { className: 'dshkp-empty' }, t('proxyUnavailable'))
         : h('div', { className: 'dshkp-kv' },
-            kvRow('openai', 'openai', t('openaiBase'), proxy.openaiBaseUrl),
-            kvRow('anthropic', 'anthropic', t('anthropicBase'), proxy.anthropicBaseUrl),
-            kvRow('key', 'key', t('apiKey'), proxy.key))
+            kvRow('openai', t('openaiBase'), proxy.openaiBaseUrl),
+            kvRow('anthropic', t('anthropicBase'), proxy.anthropicBaseUrl),
+            kvRow('key', t('apiKey'), proxy.key))
 
       const proxyCard = card('proxy', t('proxy'),
         h('button', {
@@ -823,41 +1223,6 @@ window.__ModuleLoader__.load({
             field('maxContextWindow', t('maxContextWindow'), { placeholder: '200000' })),
           h('p', { className: 'dshkp-hint' }, t('maxContextHint'))))
 
-      // ── 导入卡 ──
-      // 账号导入不是常驻表单：打开设置页时最该看到的是「现在用哪个账号 + 花了多少」，
-      // 粘贴凭据是低频动作，所以折进 <details>。原生折叠不占 React 状态，
-      // 组件重挂载也不会丢用户的展开/收起选择。
-      const importCard = h('details', { className: 'dshkp-details', key: 'import' },
-        h('summary', { className: 'dshkp-summary' }, t('addAccount')),
-        card('import', t('importTitle'), null,
-        h('div', { className: 'dshkp-form' },
-          h('p', { className: 'dshkp-hint', style: { marginTop: 0 } }, t('importHint')),
-          h('label', { className: 'dshkp-field' },
-            h('span', null, t('label')),
-            h('input', {
-              className: 'dshkp-input', type: 'text', value: importLabel, spellCheck: false,
-              onChange: (event) => setImportLabel(event.target.value),
-            })),
-          h('label', { className: 'dshkp-field' },
-            h('span', null, t('credentialText')),
-            h('textarea', {
-              className: 'dshkp-input dshkp-textarea', value: importText, spellCheck: false,
-              onChange: (event) => setImportText(event.target.value),
-            })),
-          h('div', { className: 'dshkp-actions' },
-            h('button', {
-              className: 'dshkp-btn dshkp-primary', type: 'button', disabled: busy !== '' || importText.trim() === '',
-              onClick: () => { void importCredential('json') },
-            }, busyLabel('import:json', t('importJson'))),
-            h('button', {
-              className: 'dshkp-btn', type: 'button', disabled: busy !== '' || importText.trim() === '',
-              onClick: () => { void importCredential('refresh') },
-            }, busyLabel('import:refresh', t('importRefresh'))),
-            h('button', {
-              className: 'dshkp-btn', type: 'button', disabled: busy !== '' || importText.trim() === '',
-              onClick: () => { void importCredential('apiKey') },
-            }, busyLabel('import:apiKey', t('importApiKey')))))))
-
       // ── 错误列表（Host 收集的模型/用量读取失败）──
       const errors = status && Array.isArray(status.errors) ? status.errors : []
       const errorsCard = errors.length === 0
@@ -879,10 +1244,10 @@ window.__ModuleLoader__.load({
         status === undefined
           ? h('div', { className: 'dshkp-empty' }, t('loading'))
           : h(React.Fragment, null,
-              usageCard,
               accountsCard,
-              importCard,
+              connectCard,
               modelsCard,
+              usageCard,
               proxyCard,
               connectionCard,
               errorsCard))
