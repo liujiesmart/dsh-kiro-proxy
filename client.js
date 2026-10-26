@@ -425,7 +425,7 @@ window.__ModuleLoader__.load({
 .dshkp-row-sub{display:flex;align-items:center;gap:6px;flex-wrap:wrap;font-size:11px;color:var(--dsw-alias-label-tertiary,#adb2b8)}
 .dshkp-tag{padding:0 6px;border:1px solid var(--dsw-alias-border-l2,rgba(255,255,255,.12));border-radius:6px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11px;line-height:17px;color:var(--dsw-alias-label-secondary,#cfd3d6)}
 .dshkp-badge{padding:0 6px;border-radius:999px;font-size:10px;line-height:16px;font-weight:600}
-.dshkp-badge-active{background:var(--dsw-alias-fill-l1,rgba(139,92,246,.16));color:var(--dsw-alias-brand-primary,#a78bfa)}
+.dshkp-badge-active{border:1px solid var(--dsw-alias-state-success-secondary,rgba(34,197,94,.45));background:transparent;color:var(--dsw-alias-state-success-primary,#22c55e)}
 .dshkp-state{display:inline-flex;align-items:center;gap:5px}
 .dshkp-state::before{content:"";width:6px;height:6px;border-radius:50%;background:var(--dsw-alias-state-idle-primary,#9ca3af)}
 .dshkp-state-ready::before{background:var(--dsw-alias-brand-primary,#8b5cf6)}
@@ -470,12 +470,15 @@ window.__ModuleLoader__.load({
 .dshkp-usage-amount{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px;color:var(--dsw-alias-label-secondary,#cfd3d6);text-align:right}
 .dshkp-usage-reset{grid-column:1/-1;font-size:11px;color:var(--dsw-alias-label-tertiary,#adb2b8)}
 .dshkp-usage-bar{grid-column:1/-1;height:5px;border-radius:999px;background:var(--dsw-alias-fill-l2,rgba(255,255,255,.1));overflow:hidden}
-.dshkp-usage-bar-fill{display:block;height:100%;border-radius:999px;background:var(--dsw-alias-label-secondary,#cfd3d6);transition:width .2s ease}
+.dshkp-usage-bar-fill{display:block;height:100%;border-radius:999px;background:var(--dsw-alias-state-success-primary,#22c55e);transition:width .2s ease}
 .dshkp-usage-low .dshkp-usage-bar-fill{background:var(--dsw-alias-state-warn-primary,#f59e0b)}
 .dshkp-usage-critical .dshkp-usage-bar-fill{background:var(--dsw-alias-state-error-primary,#ef4444)}
-.dshkp-usage-left{grid-column:1/-1;font-size:11.5px;color:var(--dsw-alias-label-secondary,#cfd3d6)}
+.dshkp-usage-left{grid-column:1/-1;font-size:11.5px;color:var(--dsw-alias-state-success-primary,#22c55e)}
 .dshkp-usage-low .dshkp-usage-left{color:var(--dsw-alias-state-warn-primary,#f59e0b)}
 .dshkp-usage-critical .dshkp-usage-left{color:var(--dsw-alias-state-error-primary,#ef4444)}
+.dshkp-card-ok{border-color:var(--dsw-alias-state-success-secondary,rgba(34,197,94,.45))}
+.dshkp-card-low{border-color:var(--dsw-alias-state-warn-secondary,rgba(245,158,11,.5))}
+.dshkp-card-critical{border-color:var(--dsw-alias-state-error-secondary,rgba(239,68,68,.55))}
 .dshkp-kv{display:grid;gap:8px}
 .dshkp-kv-row{display:grid;grid-template-columns:auto minmax(0,1fr) auto;gap:10px;align-items:center}
 .dshkp-kv-key{font-size:12px;color:var(--dsw-alias-label-secondary,#cfd3d6);white-space:nowrap}
@@ -493,7 +496,8 @@ a.dshkp-btn{text-decoration:none;display:inline-block}
 .dshkp-quota{display:inline-flex;align-items:center;gap:6px;padding:3px 9px;border:1px solid var(--dsw-alias-border-l2,rgba(255,255,255,.12));border-radius:999px;background:transparent;color:var(--dsw-alias-label-secondary,#cfd3d6);font-family:inherit;font-size:11px;line-height:16px;white-space:nowrap;cursor:pointer}
 .dshkp-quota:hover:not(:disabled){background:var(--dsw-alias-interactive-bg-hover,rgba(255,255,255,.07))}
 .dshkp-quota:disabled{cursor:progress;opacity:.7}
-.dshkp-quota-dot{width:6px;height:6px;border-radius:50%;background:var(--dsw-alias-brand-primary,#8b5cf6);flex:none}
+.dshkp-quota-dot{width:6px;height:6px;border-radius:50%;background:var(--dsw-alias-state-success-primary,#22c55e);flex:none}
+.dshkp-quota-ok{border-color:var(--dsw-alias-state-success-secondary,rgba(34,197,94,.45))}
 .dshkp-quota-low{color:var(--dsw-alias-state-warn-primary,#f59e0b);border-color:var(--dsw-alias-state-warn-secondary,rgba(245,158,11,.45))}
 .dshkp-quota-low .dshkp-quota-dot{background:var(--dsw-alias-state-warn-primary,#f59e0b)}
 .dshkp-quota-critical{color:var(--dsw-alias-state-error-primary,#ef4444);border-color:var(--dsw-alias-state-error-secondary,rgba(239,68,68,.5))}
@@ -870,7 +874,7 @@ a.dshkp-btn{text-decoration:none;display:inline-block}
       }, [busy, fields, method, t])
 
       // ── 渲染辅助 ──
-      const card = (key, title, actions, body) => h('section', { className: 'dshkp-card', key },
+      const card = (key, title, actions, body, extra) => h('section', { className: `dshkp-card${extra ? ` ${extra}` : ''}`, key },
         h('div', { className: 'dshkp-card-head' },
           h('div', { className: 'dshkp-card-title' }, title),
           actions === null || actions === undefined ? null : h('div', { className: 'dshkp-actions' }, actions)),
@@ -1178,12 +1182,18 @@ a.dshkp-btn{text-decoration:none;display:inline-block}
                   : null)
             }))
 
+      const tightUsage = tightestRow(usage)
+      const usageTone = tightUsage === undefined ? ''
+        : tightUsage.left < 5 ? 'dshkp-card-critical'
+        : tightUsage.left < 20 ? 'dshkp-card-low'
+        : 'dshkp-card-ok'
       const usageCard = card('usage', t('usage'),
         h('button', {
           className: 'dshkp-btn', type: 'button', disabled: busy !== '',
           onClick: () => { void refresh() },
         }, busyLabel('refresh', t('refreshUsage'))),
-        usageBody)
+        usageBody,
+        usageTone)
 
       // ── 代理卡 ──
       const proxy = status && status.proxy ? status.proxy : undefined
@@ -1310,7 +1320,7 @@ a.dshkp-btn{text-decoration:none;display:inline-block}
       if (tight === undefined) return null
 
       const percent = tight.left
-      const tone = percent < 5 ? ' dshkp-quota-critical' : percent < 20 ? ' dshkp-quota-low' : ''
+      const tone = percent < 5 ? ' dshkp-quota-critical' : percent < 20 ? ' dshkp-quota-low' : ' dshkp-quota-ok'
       const rows = status.usage && Array.isArray(status.usage.rows) ? status.usage.rows : []
       const detail = [
         status.usage && status.usage.plan ? status.usage.plan : 'Kiro',

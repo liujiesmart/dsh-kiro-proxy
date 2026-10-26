@@ -1,6 +1,6 @@
 {
   "name": "dsh-kiro-proxy",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "type": "module",
   "description": "Kiro (AWS CodeWhisperer) provider route for DeepSeek Harness plus an OpenAI/Anthropic reverse proxy in front of it",
   "license": "MIT",
