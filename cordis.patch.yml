@@ -1,0 +1,16 @@
+# The dsh-kiro-proxy bundle patch: mounts the Kiro route and its reverse proxy
+# into any profile that installs this package.
+#
+# No credential, proxy, or profile ARN is inlined. Kiro authorizes model
+# families by request egress and every account signs in differently, so those
+# are user facts: put them in the profile's own `cordis.patch.yml` under the
+# `kiro-proxy` id, or edit them from Settings → Kiro Proxy, which writes the
+# plugin's own settings document and hot-reloads.
+#
+# Credentials stay out of composition. The plugin reads Kiro IDE/CLI's existing
+# `~/.aws/sso/cache` sign-in, and an imported account is stored under DSH home.
+
+- insert:
+    - id: kiro-proxy
+      name: dsh-kiro-proxy
+      config: {}

@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Kiro Proxy",
+    "description": "Routes DeepSeek Harness and any OpenAI/Anthropic CLI to Kiro (AWS CodeWhisperer) using the sign-in Kiro IDE or CLI already holds, with model discovery, credit usage, and a local reverse proxy."
+  }
+}

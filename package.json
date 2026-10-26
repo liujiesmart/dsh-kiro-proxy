@@ -1,0 +1,75 @@
+{
+  "name": "dsh-kiro-proxy",
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Kiro (AWS CodeWhisperer) provider route for DeepSeek Harness plus an OpenAI/Anthropic reverse proxy in front of it",
+  "license": "MIT",
+  "author": {
+    "name": "liujiesmart",
+    "url": "https://github.com/liujiesmart"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/liujiesmart/dsh-kiro-proxy.git"
+  },
+  "homepage": "https://github.com/liujiesmart/dsh-kiro-proxy#readme",
+  "bugs": {
+    "url": "https://github.com/liujiesmart/dsh-kiro-proxy/issues"
+  },
+  "keywords": [
+    "deepseek-harness",
+    "deepseek-harness-plugin",
+    "dsh",
+    "dsh-plugin",
+    "dsh-plugins",
+    "cordis-plugin",
+    "kiro",
+    "kiro-cli",
+    "codewhisperer",
+    "openai-compatible",
+    "anthropic-compatible",
+    "reverse-proxy",
+    "claude"
+  ],
+  "exports": {
+    ".": "./index.js",
+    "./client": "./client.js",
+    "./locale/*.json": "./locale/*.json",
+    "./icon": "./icon.svg"
+  },
+  "files": [
+    "index.js",
+    "client.js",
+    "lib/**/*.js",
+    "cordis.patch.yml",
+    "locale/*.json",
+    "icon.svg",
+    "tests/*.mjs",
+    "README.md",
+    "LICENSE",
+    "NOTICE.md",
+    "docs/**/*.md"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "immediately": true,
+      "inject": [
+        "@deepseek-ai/dsh-client-ui-settings",
+        "@deepseek-ai/dsh-client-ui-conversation",
+        "@deepseek-ai/dsh-client-ui-model-selection",
+        "@deepseek-ai/dsh-client-locale"
+      ]
+    }
+  },
+  "engines": {
+    "node": "^22.19 || >=24"
+  },
+  "scripts": {
+    "test": "node tests/run-all.mjs",
+    "test:live": "node tests/acceptance.mjs"
+  }
+}

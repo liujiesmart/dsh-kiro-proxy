@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Kiro Proxy",
+    "description": "托管 Kiro 账号、选择模型、查看用量，并对外提供 OpenAI/Anthropic 反向代理；复用 Kiro IDE/CLI 已有的登录态。"
+  }
+}
