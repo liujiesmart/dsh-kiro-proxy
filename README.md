@@ -10,12 +10,31 @@ This is an independent integration, not affiliated with or endorsed by AWS. Kiro
 
 ## Install
 
-```sh
-dsh plugin --profile <profile> add github:liujiesmart/dsh-kiro-proxy
-dsh --profile <profile>
+**Desktop application.** Open **Plugins** in the sidebar, choose **Add plugin**, and paste:
+
+```
+github:liujiesmart/dsh-kiro-proxy
 ```
 
-Or point the Harness Plugin Manager at a local checkout of this directory (a local install is a link, so edits apply on reload).
+Then **Enable now**. A GitHub spec is exactly what that dialog takes. The `desktop` profile belongs to the Electron application, so `dsh plugin --profile desktop …` is refused on purpose — in the desktop build the dialog is the only way in.
+
+**Every other profile (web, tui, headless).** Same spec, through the CLI:
+
+```sh
+dsh plugin --profile web add github:liujiesmart/dsh-kiro-proxy
+dsh --profile web
+```
+
+**Pin a release** when an install must not drift. The tag and any commit work the same way:
+
+```
+github:liujiesmart/dsh-kiro-proxy#v0.1.1
+github:liujiesmart/dsh-kiro-proxy#eb223f4
+```
+
+A local checkout installs the same way — paste its absolute path into the same dialog, or pass it to `dsh plugin add`. A local install is a link, so edits apply on reload.
+
+There is nothing to build: `index.js` and `client.js` are the shipped artifacts and the package declares no `prepare` script, so `pnpm` installs it in seconds on a machine with no toolchain.
 
 ## What it does
 
@@ -187,12 +206,31 @@ Kiro CLI 登录过，装完就能直接对话。
 
 ## 安装
 
-```sh
-dsh plugin --profile <profile> add github:liujiesmart/dsh-kiro-proxy
-dsh --profile <profile>
+**桌面版。** 侧栏打开 **插件** → **添加插件**，把这个粘进去：
+
+```
+github:liujiesmart/dsh-kiro-proxy
 ```
 
-或在 Harness 的 Plugin Manager 里安装本目录（本地目录安装是 link，改代码即时生效）。
+然后点 **立即启用**。这个对话框接受的就是 GitHub spec。`desktop` profile 归 Electron 应用独占管理，所以 `dsh plugin --profile desktop …` 会被直接拒绝——桌面版只能走这个对话框。
+
+**其它 profile（web、tui、headless）。** 同一个 spec，走命令行：
+
+```sh
+dsh plugin --profile web add github:liujiesmart/dsh-kiro-proxy
+dsh --profile web
+```
+
+**需要钉住版本**时，tag 和 commit 都可以：
+
+```
+github:liujiesmart/dsh-kiro-proxy#v0.1.1
+github:liujiesmart/dsh-kiro-proxy#eb223f4
+```
+
+本地目录一样能装：把绝对路径粘进同一个对话框，或交给 `dsh plugin add`。本地安装是 link，改完代码重载即生效。
+
+没有构建步骤：`index.js` 与 `client.js` 就是发布产物，包里也没有 `prepare` 脚本，所以在没有工具链的机器上 `pnpm` 几秒就能装完。
 
 ## 它做三件事
 
