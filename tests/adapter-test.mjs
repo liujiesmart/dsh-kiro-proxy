@@ -251,10 +251,41 @@ async function collect(events) {
   check('TOOL_USE -> tool-calls', finishReason('TOOL_USE').kind === 'tool-calls')
   check('MAX_TOKENS -> max-tokens', finishReason('MAX_TOKENS').kind === 'max-tokens')
   check('MODEL_CONTEXT_WINDOW_EXCEEDED -> max-tokens', finishReason('MODEL_CONTEXT_WINDOW_EXCEEDED').kind === 'max-tokens')
-  check('CONTENT_FILTERED -> stop', finishReason('CONTENT_FILTERED').kind === 'stop')
-  check('PAUSE_TURN -> stop', finishReason('PAUSE_TURN').kind === 'stop')
+  // 这三条曾经都映射成 stop：用户看到半句话，界面却显示"已完成"。
+  // 截断的回答必须是一个错误，而不是一个静默的成功。
+  check(
+    'CONTENT_FILTERED -> error 而非静默 stop',
+    finishReason('CONTENT_FILTERED').kind === 'error' && finishReason('CONTENT_FILTERED').failure.code === 'CONTENT_FILTERED',
+    JSON.stringify(finishReason('CONTENT_FILTERED')),
+  )
+  check(
+    'PAUSE_TURN -> error 而非静默 stop',
+    finishReason('PAUSE_TURN').kind === 'error' && finishReason('PAUSE_TURN').failure.code === 'PAUSE_TURN',
+    JSON.stringify(finishReason('PAUSE_TURN')),
+  )
+  check(
+    'STREAM_CLOSED -> error 且在可重试码里',
+    finishReason('STREAM_CLOSED').kind === 'error'
+      && finishReason('STREAM_CLOSED').failure.code === 'STREAM_CLOSED'
+      && adapterPolicy.retryableCodes.includes('STREAM_CLOSED'),
+    JSON.stringify(finishReason('STREAM_CLOSED')),
+  )
   const unknown = finishReason('SOMETHING_NEW')
   check('未知 stopReason -> error 而非成功', unknown.kind === 'error' && unknown.failure.code === 'MALFORMED_RESPONSE', JSON.stringify(unknown))
+}
+
+// ---------------------------------------------------------------------------
+// 8b. 没有终止帧时导出 stopReason：工具轮照旧，正文被截断要如实上报
+// ---------------------------------------------------------------------------
+{
+  const { deriveStopReason } = await import('../lib/kiro-client.js')
+  check('无终止帧 + 只有工具 -> TOOL_USE', deriveStopReason({ sawTool: true, openToolCount: 0, visibleCharacters: 0 }) === 'TOOL_USE')
+  check('无终止帧 + 工具仍开着 -> TOOL_USE', deriveStopReason({ sawTool: false, openToolCount: 1, visibleCharacters: 0 }) === 'TOOL_USE')
+  check('无终止帧 + 什么都没发 -> END_TURN', deriveStopReason({ sawTool: false, openToolCount: 0, visibleCharacters: 0 }) === 'END_TURN')
+  check(
+    '无终止帧 + 已发正文 -> STREAM_CLOSED（截断，可重试）',
+    deriveStopReason({ sawTool: false, openToolCount: 0, visibleCharacters: 812 }) === 'STREAM_CLOSED',
+  )
 }
 
 // ---------------------------------------------------------------------------

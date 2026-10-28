@@ -141,6 +141,8 @@ An empty turn therefore triggers the fallback chain instead of failing the turn;
 
 **Cut-off turns.** Sometimes a stream carries only reasoning and then ends with `END_TURN`/`PAUSE_TURN` — nothing visible, no tool call. Kiro's own client answers that with one more `continue` turn, so the plugin does the same (bounded, `autoContinue` + `maxContinuations`), instead of leaving the user to type "继续" themselves. The continuation is sent as `assistant: understood` + `human: continue` so the two user turns cannot merge into one.
 
+**Truncated answers are errors, never silent successes.** A stream can also stop *after* text has already been emitted: Kiro ends mid-sentence with `PAUSE_TURN`, filters it with `CONTENT_FILTERED`, or the connection closes with no terminal frame at all. Reporting any of those as `stop` is what makes half an answer look finished — the text simply ends, the turn reads as completed, and nothing retries. They are therefore reported as `PAUSE_TURN`, `CONTENT_FILTERED` and `STREAM_CLOSED` respectively; `STREAM_CLOSED` is in the retryable set, so a dropped connection re-asks the turn while the other two say plainly that what is on screen is partial. A missing terminal frame is only read as `END_TURN` when nothing visible was emitted and no tool was involved, which is the one case where its absence is normal.
+
 **Oversized requests.** `Input is too long.` is a 400 that arrives with nothing but that sentence, and the 198-entry history cap does not prevent it: a single turn with dozens of huge tool results can push the payload into megabytes. The serializer therefore also enforces a character budget, dropping the oldest turn pairs first (alternation preserved, orphaned tool results degraded to text) and clipping individual tool results to 20k characters (head + tail, with a marker).
 
 **Tool calls.** A tool call with arguments arrives as `start` → an `input: ""` frame → argument fragments → `stop`. That empty fragment carries the tool name, so treating it as a second `start` would produce two blocks for one `toolUseId` — and replaying them on the next step answers `400 Improperly formed request.` Blocks are therefore keyed by `toolUseId` and idempotent. Also, on tool-only turns Kiro sends **no `metadataEvent` at all** — four frames and nothing else. The stop reason is derived from what actually happened, and empty arguments are normalised to `{}` because both DSH and OpenAI clients `JSON.parse` them.
@@ -345,6 +347,8 @@ ANTHROPIC_BASE_URL=http://127.0.0.1:PORT ANTHROPIC_API_KEY=kr-xxxx claude
 （不可重试——同一份提示词重发还是空流）。设置页会显示最近一次自动换模型。
 
 **回合被截断。** 有时一条流只有 reasoning，然后以 `END_TURN`/`PAUSE_TURN` 收尾 —— 没有可见正文、也没有工具调用。Kiro 自己的客户端对这种情况会补一轮 `continue`，插件照做（有上限，`autoContinue` + `maxContinuations`），而不是让你手动输入"继续"。续写按 `assistant: understood` + `human: continue` 发，避免两条 user 轮被合并成一条。
+
+**正文被截断时，必须是错误，不能是静默成功。** 流也可能在**正文已经流出来之后**断掉：Kiro 以 `PAUSE_TURN` 停在中途、以 `CONTENT_FILTERED` 过滤掉、或者连接直接关闭连终止帧都没有。把其中任何一种报成 `stop`，结果就是"半句话看起来像答完了"——文字突然没了、界面显示已完成、也没有任何重试。所以它们分别报成 `PAUSE_TURN`、`CONTENT_FILTERED`、`STREAM_CLOSED`；其中 `STREAM_CLOSED` 在可重试码表里，连接断掉的那一轮会被重发，另两种则明确告诉你屏幕上是残缺的。缺少终止帧只有在"什么都没发出来、也没有工具"时才按 `END_TURN` 处理，那也是它唯一正常的情况。
 
 **超长请求。** `Input is too long.` 是一个只有这句话的 400，而 198 条历史上限管不住它：
 一个回合里几十条巨型工具结果就能把报文推到几 MB。所以序列化器还按字符兜底——先丢最旧的整轮
