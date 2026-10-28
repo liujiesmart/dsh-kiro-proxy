@@ -158,5 +158,20 @@ const response = frames => ({ status: 200, headers: {}, body: streamOf(frames) }
   check('maxContinuations=1 -> 共 2 轮', calls.length === 2, calls.length)
 }
 
+// ---------------------------------------------------------------------------
+// 7. 续写时不能先吐出上一轮的 stop：否则适配器提前收尾，正文落在 finish 之后
+//    （真实症状：最后一轮只有思考、没有正文就结束了）
+// ---------------------------------------------------------------------------
+{
+  const { client } = buildClient([response(reasoningOnly), response(withText)])
+  const events = await drain(client)
+  const kinds = events.map(event => event.kind)
+  const firstStop = kinds.indexOf('stop')
+  const firstText = kinds.indexOf('text')
+  check('续写时只出现一个 stop', kinds.filter(kind => kind === 'stop').length === 1, kinds.join(','))
+  check('stop 在正文之后', firstText >= 0 && firstStop > firstText, kinds.join(','))
+  check('usage 也只出现一次', kinds.filter(kind => kind === 'usage').length === 1, kinds.join(','))
+}
+
 console.log(`\n${pass} passed, ${fail} failed`)
 process.exit(fail === 0 ? 0 : 1)

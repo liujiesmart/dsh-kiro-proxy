@@ -360,7 +360,11 @@ async function collect(events) {
     { kind: 'usage', inputTokens: 1, outputTokens: 1 },
     { kind: 'stop', stopReason: 'END_TURN' },
   ])
-  check('只有 reasoning 时不报 CONTENT_FILTERED', chunks.at(-1).reason.kind === 'stop', JSON.stringify(chunks.at(-1).reason))
+  // 早期版本把"只有 reasoning"当成正常结束，用户看到的就是空白的一轮；
+  // 现在如实报 EMPTY_RESPONSE（可重试），见第 16 组。
+  check('只有 reasoning 时报 EMPTY_RESPONSE 而非静默成功',
+    chunks.at(-1).reason.kind === 'error' && chunks.at(-1).reason.failure.code === 'EMPTY_RESPONSE',
+    JSON.stringify(chunks.at(-1).reason))
 }
 
 // ---------------------------------------------------------------------------
@@ -413,6 +417,35 @@ async function collect(events) {
     && JSON.parse(blocks[2].arguments).pattern === 'README*',
     JSON.stringify(blocks.map(block => block.arguments)))
   check('名字正确', blocks.map(block => block.name).join(',') === 'read,glob,glob', blocks.map(block => block.name).join(','))
+}
+
+// ---------------------------------------------------------------------------
+// 16. 只有 reasoning、没有正文也没有工具 -> EMPTY_RESPONSE，且可重试
+//    （真实症状：这一轮"没有返回结果就结束了"）
+// ---------------------------------------------------------------------------
+{
+  const chunks = await collect([
+    { kind: 'reasoning', text: '想了很久……' },
+    { kind: 'usage', inputTokens: 10, outputTokens: 5 },
+    { kind: 'stop', stopReason: 'END_TURN' },
+  ])
+  const finish = chunks.at(-1)
+  check('只有 reasoning -> EMPTY_RESPONSE',
+    finish.reason.kind === 'error' && finish.reason.failure.code === 'EMPTY_RESPONSE',
+    JSON.stringify(finish.reason))
+  check('EMPTY_RESPONSE 在可重试码里', adapterPolicy.retryableCodes.includes('EMPTY_RESPONSE'), adapterPolicy.retryableCodes.join(','))
+  check('提示指明要重试', /再发一次/.test(finish.reason.failure.message), finish.reason.failure.message)
+}
+
+// 17. reasoning + 正文 -> 正常 stop
+{
+  const chunks = await collect([
+    { kind: 'reasoning', text: '想一想' },
+    { kind: 'text', text: '答案' },
+    { kind: 'usage', inputTokens: 1, outputTokens: 1 },
+    { kind: 'stop', stopReason: 'END_TURN' },
+  ])
+  check('reasoning + 正文 -> stop', chunks.at(-1).reason.kind === 'stop', JSON.stringify(chunks.at(-1).reason))
 }
 
 console.log(`\n${pass} passed, ${fail} failed`)
