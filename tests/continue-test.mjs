@@ -131,10 +131,10 @@ const response = frames => ({ status: 200, headers: {}, body: streamOf(frames) }
 // ---------------------------------------------------------------------------
 {
   const { client, calls } = buildClient([
-    response(reasoningOnly), response(reasoningOnly), response(reasoningOnly), response(reasoningOnly),
+    response(reasoningOnly), response(reasoningOnly), response(reasoningOnly), response(reasoningOnly), response(reasoningOnly),
   ])
   await drain(client)
-  check('续写有上限（默认 2 次 -> 共 3 轮）', calls.length === 3, calls.length)
+  check('续写有上限（默认 2 次续写 + 1 次 fresh retry -> 共 4 轮）', calls.length === 4, calls.length)
 }
 
 // ---------------------------------------------------------------------------
@@ -155,7 +155,7 @@ const response = frames => ({ status: 200, headers: {}, body: streamOf(frames) }
     response(reasoningOnly), response(reasoningOnly), response(reasoningOnly), response(reasoningOnly),
   ], { maxContinuations: 1 })
   await drain(client)
-  check('maxContinuations=1 -> 共 2 轮', calls.length === 2, calls.length)
+  check('maxContinuations=1 -> 1 次续写 + 1 次 fresh retry -> 共 3 轮', calls.length === 3, calls.length)
 }
 
 // ---------------------------------------------------------------------------
@@ -171,6 +171,41 @@ const response = frames => ({ status: 200, headers: {}, body: streamOf(frames) }
   check('续写时只出现一个 stop', kinds.filter(kind => kind === 'stop').length === 1, kinds.join(','))
   check('stop 在正文之后', firstText >= 0 && firstStop > firstText, kinds.join(','))
   check('usage 也只出现一次', kinds.filter(kind => kind === 'usage').length === 1, kinds.join(','))
+}
+
+// ---------------------------------------------------------------------------
+// 8. fresh retry 恢复原始消息：续写预算用尽后用原始请求再试一次
+// ---------------------------------------------------------------------------
+{
+  const { client, calls } = buildClient([
+    response(reasoningOnly), // round 1: 续写
+    response(reasoningOnly), // round 2: 续写
+    response(reasoningOnly), // round 3: 触发 fresh retry
+    response(reasoningOnly), // round 4: fresh retry 后的请求（恢复原始消息）
+  ])
+  await drain(client)
+  check('共 4 轮', calls.length === 4, calls.length)
+  // 前 2 轮是续写（current 是 continue）
+  check('前 2 轮是续写', calls[0].current === '开始吧' && calls[1].current === 'continue', JSON.stringify(calls.slice(0, 2)))
+  // round 3 触发 fresh retry，current 仍是 continue（5 条消息）
+  check('round 3 触发 fresh retry', calls[2].userMessages === 2 && calls[2].current === 'continue', JSON.stringify(calls[2]))
+  // round 4 是 fresh retry 后的请求，应该恢复原始消息（current 是开始吧，history 里没有 continue）
+  check('fresh retry 恢复原始消息', calls[3].current === '开始吧' && calls[3].userMessages === 0, JSON.stringify(calls[3]))
+}
+
+// ---------------------------------------------------------------------------
+// 9. fresh retry 成功后正常退出
+// ---------------------------------------------------------------------------
+{
+  const { client, calls } = buildClient([
+    response(reasoningOnly), // round 1: 续写
+    response(reasoningOnly), // round 2: 续写
+    response(withText),      // round 3: fresh retry 成功
+  ])
+  const events = await drain(client)
+  check('共 3 轮', calls.length === 3, calls.length)
+  check('有正文', events.some(e => e.kind === 'text'), 'no text')
+  check('正常 stop', events.at(-1)?.kind === 'stop', JSON.stringify(events.at(-1)))
 }
 
 console.log(`\n${pass} passed, ${fail} failed`)
