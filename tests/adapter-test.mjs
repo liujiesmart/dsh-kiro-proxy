@@ -282,9 +282,23 @@ async function collect(events) {
   check('无终止帧 + 只有工具 -> TOOL_USE', deriveStopReason({ sawTool: true, openToolCount: 0, visibleCharacters: 0 }) === 'TOOL_USE')
   check('无终止帧 + 工具仍开着 -> TOOL_USE', deriveStopReason({ sawTool: false, openToolCount: 1, visibleCharacters: 0 }) === 'TOOL_USE')
   check('无终止帧 + 什么都没发 -> END_TURN', deriveStopReason({ sawTool: false, openToolCount: 0, visibleCharacters: 0 }) === 'END_TURN')
+  // 服务端对普通回答不发 metadataEvent：收尾靠 contextUsageEvent/meteringEvent。
+  // 见到这对帧 + 有正文 = 正常说完，不能判成截断（否则每条回答都会失败重试）。
   check(
-    '无终止帧 + 已发正文 -> STREAM_CLOSED（截断，可重试）',
-    deriveStopReason({ sawTool: false, openToolCount: 0, visibleCharacters: 812 }) === 'STREAM_CLOSED',
+    '终端用量帧 + 已发正文 -> END_TURN（服务端没有 metadataEvent 时的正常收尾）',
+    deriveStopReason({ sawTool: false, openToolCount: 0, visibleCharacters: 812, sawTerminalUsage: true }) === 'END_TURN',
+  )
+  check(
+    '终端用量帧 + 无正文 -> END_TURN',
+    deriveStopReason({ sawTool: false, openToolCount: 0, visibleCharacters: 0, sawTerminalUsage: true }) === 'END_TURN',
+  )
+  check(
+    '既没有终端用量帧也没有 metadata + 已发正文 -> STREAM_CLOSED（可疑截断，可重试）',
+    deriveStopReason({ sawTool: false, openToolCount: 0, visibleCharacters: 812, sawTerminalUsage: false }) === 'STREAM_CLOSED',
+  )
+  check(
+    '工具轮优先于用量帧判断',
+    deriveStopReason({ sawTool: true, openToolCount: 0, visibleCharacters: 0, sawTerminalUsage: true }) === 'TOOL_USE',
   )
 }
 
