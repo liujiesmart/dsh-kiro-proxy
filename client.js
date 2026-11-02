@@ -153,6 +153,21 @@ window.__ModuleLoader__.load({
       errors: 'Errors',
       quotaTitle: 'Kiro quota',
       quotaLeft: '{percent}% left',
+
+      update: 'Update',
+      version: 'Version',
+      currentVersion: 'Current version',
+      latestVersion: 'Latest version',
+      upToDate: 'Up to date',
+      updateAvailable: 'Update available',
+      checkUpdate: 'Check for updates',
+      checking: 'Checking…',
+      installUpdate: 'Install update',
+      installing: 'Installing…',
+      updateDone: 'Update installed. Restart DSH to apply.',
+      updateFailed: 'Update failed',
+      restartDsh: 'Restart DSH',
+      releaseNotes: 'Release notes',
     }
 
     const zh = {
@@ -258,6 +273,21 @@ window.__ModuleLoader__.load({
       errors: '错误',
       quotaTitle: 'Kiro 配额',
       quotaLeft: '剩余 {percent}%',
+
+      update: '更新',
+      version: '版本',
+      currentVersion: '当前版本',
+      latestVersion: '最新版本',
+      upToDate: '已是最新',
+      updateAvailable: '有新版本可用',
+      checkUpdate: '检查更新',
+      checking: '检查中…',
+      installUpdate: '安装更新',
+      installing: '安装中…',
+      updateDone: '更新已安装，请重启 DSH 以应用更改。',
+      updateFailed: '更新失败',
+      restartDsh: '重启 DSH',
+      releaseNotes: '更新说明',
     }
 
     /**
@@ -502,6 +532,13 @@ a.dshkp-btn{text-decoration:none;display:inline-block}
 .dshkp-quota-low .dshkp-quota-dot{background:var(--dsw-alias-state-warn-primary,#f59e0b)}
 .dshkp-quota-critical{color:var(--dsw-alias-state-error-primary,#ef4444);border-color:var(--dsw-alias-state-error-secondary,rgba(239,68,68,.5))}
 .dshkp-quota-critical .dshkp-quota-dot{background:var(--dsw-alias-state-error-primary,#ef4444)}
+.dshkp-success{margin:8px 0 0;font-size:12px;color:var(--dsw-alias-state-success-primary,#22c55e)}
+.dshkp-update-info{margin:8px 0 0}
+.dshkp-update-info p{margin:0 0 8px;font-size:12px;color:var(--dsw-alias-label-primary,#f9fafb)}
+.dshkp-release-notes{margin-top:8px;font-size:11px}
+.dshkp-release-notes summary{cursor:pointer;color:var(--dsw-alias-label-secondary,#cfd3d6);user-select:none}
+.dshkp-release-notes summary:hover{color:var(--dsw-alias-label-primary,#f9fafb)}
+.dshkp-release-notes pre{margin:8px 0 0;padding:8px;border:1px solid var(--dsw-alias-border-l1,rgba(255,255,255,.07));border-radius:7px;background:var(--dsw-alias-bg-layer-1,rgba(0,0,0,.25));font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11px;line-height:1.5;color:var(--dsw-alias-label-secondary,#cfd3d6);white-space:pre-wrap;word-break:break-word;max-height:200px;overflow-y:auto}
 `
 
     /**
@@ -1240,6 +1277,78 @@ a.dshkp-btn{text-decoration:none;display:inline-block}
         : card('errors', t('errors'), null,
             h('ul', { className: 'dshkp-errors' }, errors.map((line, index) => h('li', { key: `${index}` }, line))))
 
+      // ── 更新卡片 ──
+      const updateInfo = status && status.update ? status.update : null
+      const currentVersion = status && status.version ? status.version : 'unknown'
+      const hasUpdate = updateInfo && updateInfo.updateAvailable === true
+      const updateStatus = updateInfo && updateInfo.error
+        ? h('p', { className: 'dshkp-error' }, `${t('updateFailed')}: ${updateInfo.error}`)
+        : hasUpdate
+          ? h('div', { className: 'dshkp-update-info' },
+              h('p', null, `${t('updateAvailable')}: ${updateInfo.latest}`),
+              updateInfo.releaseNotes
+                ? h('details', { className: 'dshkp-release-notes' },
+                    h('summary', null, t('releaseNotes')),
+                    h('pre', null, updateInfo.releaseNotes))
+                : null)
+          : h('p', { className: 'dshkp-success' }, `${t('upToDate')} (${currentVersion})`)
+
+      const checkUpdate = useCallback(async () => {
+        setBusy('update-check')
+        try {
+          const body = await request('/update/check')
+          if (alive.current) {
+            // Refresh status to get updated update info
+            const statusBody = await request('/status')
+            if (alive.current) setStatus(statusBody.value)
+          }
+        } catch (err) {
+          if (alive.current) setError(err.message)
+        } finally {
+          if (alive.current) setBusy('')
+        }
+      }, [])
+
+      const installUpdate = useCallback(async () => {
+        setBusy('update-install')
+        try {
+          const body = await request('/update/apply', {
+            method: 'POST',
+            body: JSON.stringify({ tag: updateInfo?.latest ? `v${updateInfo.latest}` : undefined })
+          })
+          if (alive.current) {
+            setNotice(body.value?.message || t('updateDone'))
+            // Refresh status
+            const statusBody = await request('/status')
+            if (alive.current) setStatus(statusBody.value)
+          }
+        } catch (err) {
+          if (alive.current) setError(`${t('updateFailed')}: ${err.message}`)
+        } finally {
+          if (alive.current) setBusy('')
+        }
+      }, [updateInfo])
+
+      const updateCard = card('update', t('update'),
+        hasUpdate
+          ? h('div', { className: 'dshkp-actions' },
+              h('button', {
+                className: 'dshkp-btn dshkp-primary', type: 'button', disabled: busy !== '',
+                onClick: () => { void installUpdate() },
+              }, busyLabel('update-install', t('installUpdate'))),
+              h('button', {
+                className: 'dshkp-btn', type: 'button', disabled: busy !== '',
+                onClick: () => { void checkUpdate() },
+              }, busyLabel('update-check', t('checkUpdate'))))
+          : h('button', {
+              className: 'dshkp-btn', type: 'button', disabled: busy !== '',
+              onClick: () => { void checkUpdate() },
+            }, busyLabel('update-check', t('checkUpdate'))),
+        h('div', { className: 'dshkp-kv' },
+          kvRow('current', t('currentVersion'), currentVersion),
+          updateInfo && updateInfo.latest ? kvRow('latest', t('latestVersion'), updateInfo.latest) : null),
+        updateStatus)
+
       return h('div', { className: 'dshkp-wrap' },
         h('div', { className: 'dshkp-head' },
           h('h2', { className: 'dshkp-title' }, t('title')),
@@ -1260,6 +1369,7 @@ a.dshkp-btn{text-decoration:none;display:inline-block}
               usageCard,
               proxyCard,
               connectionCard,
+              updateCard,
               errorsCard))
     }
 
