@@ -112,8 +112,8 @@ const body = () => ({
   const text = events.filter(event => event.kind === 'text').map(event => event.text).join('')
   check('流内节流被内部重试吃掉', text === '你好', text)
   check('重试次数正确（2 次 POST：换面即可，不必退避）', calls.post.length === 2, calls.post.length)
-  check('换面救回时不需要退避', calls.sleep.length === 0, JSON.stringify(calls.sleep))
-  check('第二次打的是另一个 surface', calls.post[0].url !== calls.post[1].url, `${calls.post[0].url} vs ${calls.post[1].url}`)
+  check('重试前退避了一次', calls.sleep.length === 1, JSON.stringify(calls.sleep))
+  check('重试打的是同一个 surface', calls.post[0].url === calls.post[1].url, `${calls.post[0].url} vs ${calls.post[1].url}`)
   check('调用 id 每次不同', calls.post[0].headers['Amz-Sdk-Invocation-Id'] !== calls.post[1].headers['Amz-Sdk-Invocation-Id'])
 }
 
@@ -126,10 +126,10 @@ const body = () => ({
     body(),
   ])
   const events = await drain(client)
-  check('单面 429 被换面救回', events.some(event => event.kind === 'text'), JSON.stringify(events))
-  check('换面不需要退避', calls.sleep.length === 0, JSON.stringify(calls.sleep))
-  check('换面打的是另一个 surface',
-    calls.post[0].url !== calls.post[1].url,
+  check('单面 429 被退避重试救回', events.some(event => event.kind === 'text'), JSON.stringify(events))
+  check('429 之后先退避再重发', calls.sleep.length === 1, JSON.stringify(calls.sleep))
+  check('重发打的是同一个 surface',
+    calls.post[0].url === calls.post[1].url,
     `${calls.post[0].url} vs ${calls.post[1].url}`)
   check('记住可用的 surface（第二次请求直接命中）', client.surfacePreference.size === 1, client.surfacePreference.size)
 }
@@ -169,7 +169,7 @@ const body = () => ({
   check('三次都节流后抛出', error !== undefined)
   check('错误码是 RATE_LIMIT 或 SERVER', ['RATE_LIMIT', 'SERVER'].includes(error?.code), error?.code)
   check('错误信息保留原文', String(error?.message).includes('high load'), error?.message)
-  check('重试次数用满（3 轮 × 2 面 = 6 次出站）', calls.post.length === 6, calls.post.length)
+  check('重试次数用满（3 轮 × 1 面 = 3 次出站）', calls.post.length === 3, calls.post.length)
 }
 
 // ---------------------------------------------------------------------------
@@ -263,7 +263,7 @@ const body = () => ({
   check('IdC 请求成功', events.some(event => event.kind === 'text'), JSON.stringify(events))
   check('IdC 先问实例区域的 CodeWhisperer 面', lookups[0]?.url === 'https://codewhisperer.eu-west-1.amazonaws.com/ListAvailableProfiles', lookups[0]?.url)
   check('profile 查询不带 profile-arn 头', lookups.every(item => item.headers['x-amzn-codewhisperer-profile-arn'] === undefined))
-  check('IdC 聊天打到 ARN 所在区域', posts[0]?.url === 'https://codewhisperer.us-east-1.amazonaws.com/generateAssistantResponse', posts[0]?.url)
+  check('IdC 聊天打到 ARN 所在区域的 runtime 面', posts[0]?.url === 'https://runtime.us-east-1.kiro.dev/generateAssistantResponse', posts[0]?.url)
   check('IdC 聊天带 profile-arn 头', posts[0]?.headers['x-amzn-codewhisperer-profile-arn'] === arn)
   const sent = JSON.parse(posts[0]?.body ?? '{}')
   check('IdC 请求体带 profileArn', sent.profileArn === arn, sent.profileArn)

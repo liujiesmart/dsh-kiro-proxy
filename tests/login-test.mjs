@@ -224,7 +224,7 @@ const pending = { status: 400, body: { error: 'authorization_pending' } }
   check('IdC 存储后 method 为 idc', account.method === 'idc', account.method)
   check('IdC 存储后 region 为实例区域', account.region === 'eu-west-1', account.region)
   check('IdC 默认标签', account.label === 'IAM Identity Center · eu-west-1', account.label)
-  check('idc 凭据路由到 CodeWhisperer 面', kiroEndpoint('chat', 'eu-west-1', account.method).startsWith('https://codewhisperer.eu-west-1.'))
+  check('idc 凭据的 chat 路由到 runtime 面', kiroEndpoint('chat', 'eu-west-1', account.method) === 'https://runtime.eu-west-1.kiro.dev/generateAssistantResponse', kiroEndpoint('chat', 'eu-west-1', account.method))
 
   // 刷新必须回到注册所在区域，哪怕请求区域被覆盖成别的。
   // 用一个本地代理记录 CONNECT 目标后拒绝，整个过程不出本机。

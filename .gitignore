@@ -5,3 +5,9 @@ node_modules/
 *.tmp
 .DS_Store
 Thumbs.db
+
+# Debug dumps of live conversation turns: real prompt content and image bytes.
+# The adapter no longer writes these (see the 0.2.0 changelog), but a file left
+# over from an older build must never be committed.
+image-request-dump*.json
+*-request-dump.json

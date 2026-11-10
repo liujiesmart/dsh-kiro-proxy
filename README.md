@@ -6,7 +6,24 @@ Kiro (AWS CodeWhisperer / Amazon Q) as a [DeepSeek Harness](https://github.com/d
 
 No API key, no hand-edited `cordis.yml`: install the bundle and the `kiro-proxy` route appears. If Kiro IDE or the Kiro CLI is already signed in on this machine, chat works immediately.
 
+**v0.2.0 — required for Kiro 1.4.121+.** Kiro moved its chat traffic to
+`runtime.<region>.kiro.dev`; the older data planes now answer chat with
+`403 FEATURE_NOT_SUPPORTED` ("This version of Kiro is no longer supported").
+On Kiro 1.4.121 every chat turn failed before this release. See
+[CHANGELOG.md](CHANGELOG.md) for the wire details.
+
 This is an independent integration, not affiliated with or endorsed by AWS. Kiro is an Amazon trademark; see [NOTICE.md](NOTICE.md).
+
+## Kiro compatibility
+
+| Kiro | Status |
+| --- | --- |
+| 1.4.121 and later | **Supported.** Chat uses `runtime.<region>.kiro.dev`; catalog, usage, and profile discovery stay on the `q` / `codewhisperer` data planes. |
+| 1.4.26 and earlier | **Not supported.** Those releases do not serve `runtime.<region>.kiro.dev`, so this plugin's chat route cannot reach them. |
+
+The plugin never reads or rewrites Kiro's own files; it only reads the sign-in
+already present in `~/.aws/sso/cache`. After upgrading Kiro, run
+`node tests/live-1.4.121.mjs` to confirm the wire still lines up.
 
 ## Install
 
@@ -38,9 +55,18 @@ There is nothing to build: `index.js` and `client.js` are the shipped artifacts 
 
 ## What it does
 
-1. **Provider route `kiro-proxy`** — pick a Kiro model in a session and the turn streams straight from Kiro: text, out-of-band reasoning, tool calls, token accounting.
+1. **Provider route `kiro-proxy`** — pick a Kiro model in a session and the turn streams straight from Kiro: text, out-of-band reasoning, tool calls, token accounting, **and images** 📸
 2. **Reverse proxy** — `POST /v1/chat/completions` (OpenAI), `POST /v1/messages` (Anthropic), `GET /v1/models`, so any CLI speaking one of those protocols reaches the same Kiro account.
 3. **Settings → Kiro Proxy** — usage first, then accounts, model allowlist, proxy URL/key, connection settings.
+
+### Image Support 📸
+
+✅ **Full image support for all vision models**: Claude Opus 5.5, Claude Sonnet 4.5, GPT-4o, GPT-5.x, Gemini, GLM-4V, DeepSeek VL, Qwen-VL, and more.
+
+- Supports PNG, JPEG, GIF, WebP (up to 8000×8000px, 3.75MB)
+- Works in DSH chat interface and via OpenAI/Anthropic reverse proxy
+- Automatic fallback when Kiro API doesn't report image capabilities
+- See [IMAGE_SUPPORT.md](IMAGE_SUPPORT.md) for full documentation
 
 ## Credentials
 
@@ -203,6 +229,8 @@ MIT. See [LICENSE](LICENSE) and [NOTICE.md](NOTICE.md).
 
 不内置 API key、不需要手改 `cordis.yml`：装完 bundle 就有 `kiro-proxy` 路由。本机 Kiro IDE 或
 Kiro CLI 登录过，装完就能直接对话。
+
+**✨ v0.1.7**：修复了图片支持 — 所有支持图片的 Kiro 模型现在都能在 DSH 中正常使用。详见 [IMAGE_SUPPORT_FIX.md](docs/IMAGE_SUPPORT_FIX.md)。
 
 本项目是独立集成，与 AWS 无关；Kiro 是 Amazon 的商标，详见 [NOTICE.md](NOTICE.md)。
 

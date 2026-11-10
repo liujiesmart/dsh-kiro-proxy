@@ -22,7 +22,7 @@ import {
   normalizeCredential,
   resolveAccessToken,
 } from '../lib/kiro-auth.js'
-import { kiroEndpoint, parseUsage } from '../lib/kiro-client.js'
+import { kiroEndpoint, kiroEndpointCandidates, parseUsage } from '../lib/kiro-client.js'
 
 let pass = 0
 let fail = 0
@@ -118,11 +118,16 @@ const throwsCode = fn => {
 // 4. 端点分派：方法决定上游 surface
 // ---------------------------------------------------------------------------
 {
-  check('idc -> codewhisperer', kiroEndpoint('chat', 'us-east-1', 'idc').includes('codewhisperer.us-east-1.amazonaws.com'), kiroEndpoint('chat', 'us-east-1', 'idc'))
-  check('external_idp -> codewhisperer', kiroEndpoint('chat', 'us-east-1', 'external_idp').includes('codewhisperer'))
-  check('builder-id -> q', kiroEndpoint('chat', 'us-east-1', 'builder-id').includes('q.us-east-1.amazonaws.com'), kiroEndpoint('chat', 'us-east-1', 'builder-id'))
-  check('api_key -> q', kiroEndpoint('chat', 'us-east-1', 'api_key').includes('://q.'))
-  check('region 进入 host', kiroEndpoint('chat', 'eu-central-1', 'builder-id').includes('q.eu-central-1.amazonaws.com'), kiroEndpoint('chat', 'eu-central-1', 'builder-id'))
+  // Kiro 1.4.121 moved conversation traffic to its own runtime plane; the AWS
+  // data planes answer a chat call with 403 FEATURE_NOT_SUPPORTED, so chat no
+  // longer splits by authMethod. Catalog and usage still do.
+  const chatUrl = method => kiroEndpoint('chat', 'us-east-1', method)
+  check('chat 一律走 runtime 面', ['idc', 'external_idp', 'builder-id', 'api_key'].every(method => chatUrl(method) === 'https://runtime.us-east-1.kiro.dev/generateAssistantResponse'), chatUrl('idc'))
+  check('chat 只有一个候选面', kiroEndpointCandidates('us-east-1', 'idc').length === 1, JSON.stringify(kiroEndpointCandidates('us-east-1', 'idc')))
+  check('chat 候选面就是 runtime host', kiroEndpointCandidates('us-east-1', 'builder-id')[0] === 'https://runtime.us-east-1.kiro.dev/generateAssistantResponse', kiroEndpointCandidates('us-east-1', 'builder-id')[0])
+  check('数据面仍按 authMethod 分：idc -> codewhisperer', kiroEndpoint('catalog', 'us-east-1', 'idc').includes('codewhisperer.us-east-1.amazonaws.com'), kiroEndpoint('catalog', 'us-east-1', 'idc'))
+  check('数据面仍按 authMethod 分：builder-id -> q', kiroEndpoint('catalog', 'us-east-1', 'builder-id').includes('q.us-east-1.amazonaws.com'), kiroEndpoint('catalog', 'us-east-1', 'builder-id'))
+  check('region 进入 runtime host', kiroEndpoint('chat', 'eu-central-1', 'builder-id') === 'https://runtime.eu-central-1.kiro.dev/generateAssistantResponse', kiroEndpoint('chat', 'eu-central-1', 'builder-id'))
   check('catalog 路径', kiroEndpoint('catalog', 'us-east-1', 'builder-id').endsWith('/ListAvailableModels'), kiroEndpoint('catalog', 'us-east-1', 'builder-id'))
   check('usage 路径', kiroEndpoint('usage', 'us-east-1', 'idc').endsWith('/getUsageLimits'))
 }

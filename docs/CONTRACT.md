@@ -7,7 +7,8 @@
 `dsh-kiro-proxy` 是一个 DeepSeek Harness bundle，做两件事：
 
 1. **Host 侧 provider 路由**：注册 `llm` adapter，route 名 `kiro-proxy`，把 Harness 的
-   `GenerateOptions` 直接打到 Kiro 的 `generateAssistantResponse`（AWS EventStream）。
+   `GenerateOptions` 直接打到 Kiro 的 `generateAssistantResponse`（AWS EventStream），
+   主机是 `runtime.<region>.kiro.dev`（Kiro 1.4.121 起）。
 2. **反向代理**：在 Host 的 `webServer` 上挂 `/v1/*`（OpenAI 兼容）与 `/kiro-proxy/v1/*`
    （Anthropic 兼容），把外部 CLI（Claude Code / Cline / Codex 等）的请求
    翻译成 Kiro 请求并流式回吐。
@@ -47,12 +48,24 @@ payload 事件（`headers[':event-type']` 或 `:exception-type`）：
 `toolUseEvent{toolUseId,name?,input?,stop?}`、`contextUsageEvent{contextUsagePercentage}`、
 `meteringEvent{unit,unitPlural,usage}`、`metadataEvent{tokenUsage?,stopReason?,stopDetails?}`。
 
-端点（按 authMethod 选）：
+端点：
 
-| authMethod | chat 端点 |
+**chat 不分 authMethod。** Kiro 1.4.121 把对话流量搬到自己的 runtime 面，AWS 数据面对
+chat 一律回 `403 FEATURE_NOT_SUPPORTED`（"This version of Kiro is no longer supported"），
+换 UA 无用、换数据面也无用，所以只有一条路：
+
+| 操作 | 端点 |
 | --- | --- |
-| `idc` / `external_idp` | `https://codewhisperer.<region>.amazonaws.com/generateAssistantResponse`（带 `x-amz-target: AmazonCodeWhispererStreamingService.GenerateAssistantResponse`） |
-| 其他（builder-id / google / github / social / imported / api_key） | `https://q.<region>.amazonaws.com/generateAssistantResponse` |
+| chat | `https://runtime.<region>.kiro.dev/generateAssistantResponse` |
+| catalog | `https://{q,codewhisperer}.<region>.amazonaws.com/ListAvailableModels`（按 authMethod 选面，另一个面作为过载退路） |
+| usage | `https://{q,codewhisperer}.<region>.amazonaws.com/getUsageLimits` |
+| profiles | `https://{codewhisperer,q}.<region>.amazonaws.com/ListAvailableProfiles` |
+
+只有 chat 搬了：catalog / usage / profiles 仍在 AWS 数据面，且仍按 authMethod 分面。
+
+`ListAvailableProfiles` 的请求体必须是 `{}`：1.4.121 起带 `maxResults` 会回
+`REQUEST_BODY_INVALID`。chat 在 runtime 面上强制要求 `profileArn`，所以这条发现路径
+不是可选优化——它失败时账号能列出模型却发不出一轮对话。
 
 公共头：`authorization: Bearer <accessToken>`、`content-type: application/json`、
 `accept: application/vnd.amazon.eventstream`、`x-amzn-kiro-agent-mode: vibe`、
